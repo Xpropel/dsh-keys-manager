@@ -20,12 +20,7 @@
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/pool-overview.png" alt="Key pool main page: current key balance, cumulative consumption and the key list" width="900" />
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/pool-total.png" alt="Pool-wide available balance total" width="440" />
-  <img src="docs/screenshots/key-list.png" alt="Key list window and failover policy at a scale of 248 keys" width="440" />
+  <img src="docs/screenshots/overview-collage.png" alt="Key pool UI collage: main page, pool-wide balance total and the 248-key list" width="900" />
 </p>
 
 <p align="center"><em>Real UI captures with demo data; keys are shown masked only.</em></p>

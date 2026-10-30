@@ -20,12 +20,7 @@
 ## 界面预览
 
 <p align="center">
-  <img src="docs/screenshots/pool-overview.png" alt="API Key 池主页面：当前 Key 的剩余额度、累计消耗与 Key 列表" width="900" />
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/pool-total.png" alt="号池可用余额合计" width="440" />
-  <img src="docs/screenshots/key-list.png" alt="248 枚 Key 规模下的列表窗口与接续策略" width="440" />
+  <img src="docs/screenshots/overview-collage.png" alt="API Key 池界面拼图：主页面、号池可用余额合计与 248 枚 Key 列表" width="900" />
 </p>
 
 <p align="center"><em>实拍截图，均为演示数据；Key 只显示脱敏形式。</em></p>
