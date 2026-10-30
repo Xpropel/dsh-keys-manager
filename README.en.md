@@ -1,10 +1,34 @@
-# DeepSeek Harness API Key Pool
+<h1 align="center">DeepSeek Harness API Key Pool</h1>
 
-[中文](README.md)
+<p align="center">
+  <strong>Multi-key pool management for DeepSeek Harness: CNY balances · priority scheduling · automatic failover on insufficient balance</strong><br/>
+  Built for the official <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a>. Official API only — no third-party relays.
+</p>
 
-A multi-key management plugin for the official [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Once installed, an **API Key Pool** page appears in the sidebar: check each key's CNY balance, reorder priorities, and automatically fail over to a backup key when one runs out of credit.
+<p align="center">
+  <a href="https://github.com/Xpropel/dsh-keys-manager/releases/tag/v0.6.2"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
+  <img alt="Tests: 194 passing" src="https://img.shields.io/badge/tests-194%20passing-brightgreen?style=flat-square" />
+  <img alt="Node >= 22.19" src="https://img.shields.io/badge/node-%3E%3D22.19-339933?style=flat-square" />
+  <img alt="DeepSeek Harness plugin" src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE?style=flat-square" />
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/Xpropel/dsh-keys-manager?style=flat-square" /></a>
+</p>
 
-Current version: **0.6.2**. Uses the official DeepSeek API only — no third-party relays.
+<p align="center">
+  <a href="#features">Features</a> · <a href="#screenshots">Screenshots</a> · <a href="#installation">Installation</a> · <a href="#usage">Usage</a> · <a href="README.md">中文</a>
+</p>
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/pool-overview.png" alt="Key pool main page: current key balance, cumulative consumption and the key list" width="900" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/pool-total.png" alt="Pool-wide available balance total" width="440" />
+  <img src="docs/screenshots/key-list.png" alt="Key list window and failover policy at a scale of 248 keys" width="440" />
+</p>
+
+<p align="center"><em>Real UI captures with demo data; keys are shown masked only.</em></p>
 
 ## Features
 

@@ -1,10 +1,34 @@
-# DeepSeek Harness API Key 池
+<h1 align="center">DeepSeek Harness API Key 池</h1>
 
-[English](README.en.md)
+<p align="center">
+  <strong>多 API Key 号池管理插件：人民币余额 · 优先级调度 · 额度不足自动切换</strong><br/>
+  为官方 <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a> 而建，使用官方 API，不接入第三方中转平台。
+</p>
 
-为官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 提供多 API Key 管理的插件。安装后，左侧栏会出现 **API Key 池** 页面，可查看每枚 Key 的人民币余额、调整优先级，并在额度不足时自动切换备用 Key。
+<p align="center">
+  <a href="https://github.com/Xpropel/dsh-keys-manager/releases/tag/v0.6.2"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
+  <img alt="Tests: 194 passing" src="https://img.shields.io/badge/tests-194%20passing-brightgreen?style=flat-square" />
+  <img alt="Node >= 22.19" src="https://img.shields.io/badge/node-%3E%3D22.19-339933?style=flat-square" />
+  <img alt="DeepSeek Harness plugin" src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE?style=flat-square" />
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/Xpropel/dsh-keys-manager?style=flat-square" /></a>
+</p>
 
-当前版本 **0.6.2**，使用 DeepSeek 官方 API，不接入第三方中转平台。
+<p align="center">
+  <a href="#功能">功能</a> · <a href="#界面预览">界面预览</a> · <a href="#安装">安装</a> · <a href="#使用">使用</a> · <a href="README.en.md">English</a>
+</p>
+
+## 界面预览
+
+<p align="center">
+  <img src="docs/screenshots/pool-overview.png" alt="API Key 池主页面：当前 Key 的剩余额度、累计消耗与 Key 列表" width="900" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/pool-total.png" alt="号池可用余额合计" width="440" />
+  <img src="docs/screenshots/key-list.png" alt="248 枚 Key 规模下的列表窗口与接续策略" width="440" />
+</p>
+
+<p align="center"><em>实拍截图，均为演示数据；Key 只显示脱敏形式。</em></p>
 
 ## 功能
 
