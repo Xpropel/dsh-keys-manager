@@ -1,14 +1,14 @@
 <h1 align="center">DeepSeek Harness API Key Pool</h1>
 
 <p align="center">
-  <strong>Multi-key pool management for DeepSeek Harness: CNY balances · priority scheduling · automatic failover on insufficient balance</strong><br/>
+  <strong>Multi-key pool management for DeepSeek Harness: priority scheduling · automatic failover on insufficient balance</strong><br/>
   Built for the official <a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a>. Official API only — no third-party relays.
 </p>
 
 <p align="center">
   <a href="https://github.com/Xpropel/dsh-keys-manager/releases/tag/v0.6.2"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
   <img alt="Tests: 194 passing" src="https://img.shields.io/badge/tests-194%20passing-brightgreen?style=flat-square" />
-  <img alt="Node >= 22.19" src="https://img.shields.io/badge/node-%3E%3D22.19-339933?style=flat-square" />
+  <img alt="Node 22.19+" src="https://img.shields.io/badge/node-%3E%3D22.19-339933?style=flat-square" />
   <img alt="DeepSeek Harness plugin" src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE?style=flat-square" />
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/Xpropel/dsh-keys-manager?style=flat-square" /></a>
 </p>
