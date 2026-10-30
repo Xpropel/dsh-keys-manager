@@ -26,7 +26,7 @@ try {
   await pool.updateSettings({ refreshIntervalSeconds: 0 })
   const entries = Array.from({ length: 248 }, (_, index) => ({
     label: `演示 Key ${String(index + 1).padStart(3, '0')}`,
-    key: `sk-synthetic-list-preview-${String(index + 1).padStart(4, '0')}`,
+    key: `test-credential-list-preview-${String(index + 1).padStart(4, '0')}`,
   }))
   const first = await pool.importKeys(entries.slice(0, 200))
   const second = await pool.importKeys(entries.slice(200))

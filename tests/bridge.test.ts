@@ -49,7 +49,7 @@ test('real Harness Gateway discovers the ungenerated Remote and never returns im
   const fixture = await setup()
   try {
     assert.deepEqual(await fixture.call('snapshot', {}), fixture.pool.snapshot())
-    const key = 'sk-synthetic-bridge-secret-do-not-return'
+    const key = 'test-credential-bridge-secret-do-not-return'
     const result = await fixture.call('importKeys', { keys: [{ label: '备用', key }] })
     assert.equal(JSON.stringify(result).includes(key), false)
     assert.equal(fixture.pool.snapshot().keys.length, 1)
@@ -77,7 +77,7 @@ test('Remote rejects calls without an admitted owner and withdraws with its plug
 test('malformed wire arguments are rejected without printing their values', async () => {
   const fixture = await setup()
   try {
-    const secret = 'sk-sensitive-input'
+    const secret = 'test-credential-sensitive-input'
     await assert.rejects(fixture.call('importKeys', { keys: [{ key: secret, unexpected: secret }] }), error => {
       assert.equal(String(error).includes(secret), false)
       assert.equal(remoteErrorOf(error)?.code, 'key-pool/validation')
@@ -95,10 +95,10 @@ test('unexpected errors are redacted while safe domain failures retain explicit 
       assert.match(String(error), /刷新间隔/)
       return true
     })
-    fixture.pool.refresh = async () => { throw new Error('raw provider body with sk-private-secret') }
+    fixture.pool.refresh = async () => { throw new Error('raw provider body with test-credential-private-secret') }
     await assert.rejects(fixture.call('refresh', {}), error => {
       assert.equal(remoteErrorOf(error)?.code, 'key-pool/internal')
-      assert.equal(String(error).includes('sk-private-secret'), false)
+      assert.equal(String(error).includes('test-credential-private-secret'), false)
       return true
     })
   } finally { await fixture.close() }
@@ -107,15 +107,15 @@ test('unexpected errors are redacted while safe domain failures retain explicit 
 test('partially committed removal publishes fresh availability and an actionable safe error', async () => {
   const fixture = await setup()
   try {
-    await fixture.call('importKeys', { keys: [{ label: '待删除', key: 'sk-synthetic-removal-key' }] })
+    await fixture.call('importKeys', { keys: [{ label: '待删除', key: 'test-credential-removal-key' }] })
     const id = fixture.pool.snapshot().keys[0]!.id
     let changes = 0
     fixture.ctx.on('llm/adapters-updated', () => { changes++ })
-    fixture.credentials.unset = async () => { throw new Error('storage failure with sk-synthetic-removal-key') }
+    fixture.credentials.unset = async () => { throw new Error('storage failure with test-credential-removal-key') }
     await assert.rejects(fixture.call('remove', { id }), error => {
       assert.equal(remoteErrorOf(error)?.code, 'key-pool/operation')
       assert.match(String(error), /已从列表移除/)
-      assert.equal(String(error).includes('sk-synthetic-removal-key'), false)
+      assert.equal(String(error).includes('test-credential-removal-key'), false)
       return true
     })
     assert.equal(changes, 1)

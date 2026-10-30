@@ -16,7 +16,7 @@ function snapshot(): PoolSnapshot {
     activeId: 'primary',
     settings: { autoSwitch: true, refreshIntervalSeconds: 300 },
     keys: [{
-      id: 'primary', label: '工作', maskedKey: 'sk-…1234', enabled: true,
+      id: 'primary', label: '工作', maskedKey: 'key…1234', enabled: true,
       status: 'ready', balanceCny: '12345678901234567890.000100',
       balanceObservationSource: 'api', balanceObservedAt: 1_792_672_000_000,
       lastCheckedAt: 1_792_672_000_000, lastError: null,
@@ -30,20 +30,23 @@ function snapshot(): PoolSnapshot {
   }
 }
 
+// Import-parser fixtures need the sk- shape at runtime; build them dynamically so no key literal sits in the source.
+const fakeKey = (name: string) => 'sk-' + name
+
 function replyWith(result: ConnectionRpcResult<unknown>) {
   return createClientRequest({ rpc: { call: async () => result } })
 }
 
 test('bulk paste accepts plain keys, named keys, Windows newlines, and blank lines', () => {
-  const result = parseImport('  sk-synthetic_first  \r\n\r\n  备用账户 | sk-synthetic-second  \r\n')
+  const result = parseImport(`  ${fakeKey('synthetic_first')}  \r\n\r\n  备用账户 | ${fakeKey('synthetic-second')}  \r\n`)
   assert.deepEqual(result, [
-    { key: 'sk-synthetic_first' },
-    { label: '备用账户', key: 'sk-synthetic-second' },
+    { key: fakeKey('synthetic_first') },
+    { label: '备用账户', key: fakeKey('synthetic-second') },
   ])
 })
 
 test('empty and malformed imports report a fixed error without echoing pasted secrets', () => {
-  const synthetic = 'sk-synthetic-sensitive-key'
+  const synthetic = fakeKey('synthetic-sensitive-key')
   for (const input of ['', ' \r\n\t ', 'not-a-key', `label | ${synthetic} | extra`, `${synthetic} trailing`, `label | ${synthetic}?`]) {
     assert.throws(() => parseImport(input), error => {
       assert.ok(error instanceof Error)
@@ -56,16 +59,16 @@ test('empty and malformed imports report a fixed error without echoing pasted se
 
 test('a label split over pasted lines cannot silently join another key', () => {
   for (const newline of ['\n', '\r\n']) {
-    assert.throws(() => parseImport(`工作${newline}账户 | sk-synthetic-key`), /^Error: INVALID_IMPORT$/)
+    assert.throws(() => parseImport(`工作${newline}账户 | ${fakeKey('synthetic-key')}`), /^Error: INVALID_IMPORT$/)
   }
 })
 
 test('the paste parser handles a 200-key batch without truncating or reordering it', () => {
-  const input = Array.from({ length: 200 }, (_, index) => `Key ${index + 1} | sk-synthetic-${index}`)
+  const input = Array.from({ length: 200 }, (_, index) => `Key ${index + 1} | ${fakeKey(`synthetic-${index}`)}`)
   const result = parseImport(input.join('\n'))
   assert.equal(result.length, 200)
-  assert.deepEqual(result[0], { label: 'Key 1', key: 'sk-synthetic-0' })
-  assert.deepEqual(result[199], { label: 'Key 200', key: 'sk-synthetic-199' })
+  assert.deepEqual(result[0], { label: 'Key 1', key: fakeKey('synthetic-0') })
+  assert.deepEqual(result[199], { label: 'Key 200', key: fakeKey('synthetic-199') })
 })
 
 test('displayed CNY balances preserve long integers, tiny fractions, and trailing zeroes', () => {
@@ -77,7 +80,7 @@ test('displayed CNY balances preserve long integers, tiny fractions, and trailin
 
 test('snapshot parsing retains the public state and strips unknown secret-bearing fields', () => {
   const expected = snapshot()
-  const secret = 'sk-synthetic-private-value'
+  const secret = 'test-secret-private-value'
   const supplied = {
     ...expected, secret,
     settings: { ...expected.settings, privateToken: secret },
@@ -140,7 +143,7 @@ test('only the four explicit key-pool failure codes preserve the safe Host expla
 })
 
 test('other RPC failures hide their raw message even when their code shares the prefix', async () => {
-  const raw = 'provider body containing sk-synthetic-secret'
+  const raw = 'provider body containing test-credential-secret'
   for (const code of ['gateway/internal', 'key-pool/unexpected', 'key-pool/internal-extra']) {
     const request = replyWith({ ok: false, error: { code, message: raw, details: { raw } } })
     await assert.rejects(request('snapshot'), error => {
@@ -161,7 +164,7 @@ test('the panel first renders a loading state without inventing balances or maki
   assert.equal(calls, 0)
   assert.match(html, /正在读取 Key 池/)
   assert.equal(html.includes('12345678901234567890.000100'), false)
-  assert.equal(html.includes('sk-…1234'), false)
+  assert.equal(html.includes('key…1234'), false)
 })
 
 test('current-key summary displays remaining credit and exact cumulative consumption', () => {

@@ -43,13 +43,13 @@ test('corrupt metadata is preserved and rejected without echoing its contents', 
   const directory = await mkdtemp(join(tmpdir(), 'dsh-key-pool-corrupt-'))
   try {
     const file = join(directory, 'state.json')
-    await writeFile(file, 'sk-sensitive-not-json')
+    await writeFile(file, 'test-credential-sensitive-not-json')
     await assert.rejects(createMetadataStore(file).load(), error => {
       assert.match(String(error), /格式损坏/)
-      assert.equal(String(error).includes('sk-sensitive'), false)
+      assert.equal(String(error).includes('test-credential-sensitive'), false)
       return true
     })
-    assert.equal(await readFile(file, 'utf8'), 'sk-sensitive-not-json')
+    assert.equal(await readFile(file, 'utf8'), 'test-credential-sensitive-not-json')
   } finally { await rm(directory, { recursive: true, force: true }) }
 })
 
@@ -77,10 +77,10 @@ test('credential adapter round-trips through the real Harness credential provide
     const credentials = createCredentialStore(ctx.credentials)
     const ref = 'DSH_KEY_POOL_SYNTHETIC_TEST'
     assert.equal(await credentials.resolve(ref), undefined)
-    await credentials.set(ref, 'sk-synthetic-first-value')
-    assert.equal(await credentials.resolve(ref), 'sk-synthetic-first-value')
-    await credentials.set(ref, 'sk-synthetic-second-value')
-    assert.equal(await credentials.resolve(ref), 'sk-synthetic-second-value')
+    await credentials.set(ref, 'test-credential-first-value')
+    assert.equal(await credentials.resolve(ref), 'test-credential-first-value')
+    await credentials.set(ref, 'test-credential-second-value')
+    assert.equal(await credentials.resolve(ref), 'test-credential-second-value')
     await credentials.unset(ref)
     assert.equal(await credentials.resolve(ref), undefined)
   } finally {
@@ -133,7 +133,7 @@ test('legacy files migrate without inventing history and observation time surviv
     version: 1, activeId: 'legacy-key', settings: { autoSwitch: true, refreshIntervalSeconds: 0 },
     keys: [{
       id: 'legacy-key', credentialRef: 'DSH_KEY_POOL_LEGACY', label: '旧版 Key',
-      maskedKey: 'sk-••••test', enabled: true, status: 'error', balanceCny: '12.50',
+      maskedKey: 'tes••••test', enabled: true, status: 'error', balanceCny: '12.50',
       lastCheckedAt: 1000, lastError: '最近一次查询失败。',
     }],
   }
@@ -141,7 +141,7 @@ test('legacy files migrate without inventing history and observation time surviv
   let amount = '8.50'
   let fail = false
   const credentials = {
-    resolve: async () => 'sk-synthetic-migration-key',
+    resolve: async () => 'test-credential-migration-key',
     set: async () => { throw new Error('Migration must not replace credentials') },
     unset: async () => { throw new Error('Migration must not delete credentials') },
   }

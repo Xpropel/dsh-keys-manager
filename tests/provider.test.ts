@@ -14,9 +14,9 @@ import { KeyPool } from '../src/pool.ts'
 import { PROVIDER, ROTATE_CODE, registerPoolProvider, rotateUnstartedStream } from '../src/provider.ts'
 import type { PoolMetadata } from '../src/types.ts'
 
-const keyA = 'sk-integration-secret-aaaaaaaa'
-const keyB = 'sk-integration-secret-bbbbbbbb'
-const keyC = 'sk-integration-secret-cccccccc'
+const keyA = 'test-credential-integration-secret-aaaaaaaa'
+const keyB = 'test-credential-integration-secret-bbbbbbbb'
+const keyC = 'test-credential-integration-secret-cccccccc'
 let dshTestDirectory: string
 let previousDshHome: string | undefined
 

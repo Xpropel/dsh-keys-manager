@@ -47,7 +47,7 @@ function fixture() {
       writable: true, namespaces: [{ ns: 'agent-default-model', revision, value: { ...defaultSelection } }],
     } }
     if (endpoint === 'settings/update') {
-      if (conflict) return { ok: false, error: { code: 'settings/conflict', message: 'untrusted body sk-do-not-print', details: {} } }
+      if (conflict) return { ok: false, error: { code: 'settings/conflict', message: 'untrusted body test-credential-do-not-print', details: {} } }
       assert.equal(args.expectedRevision, revision)
       defaultSelection = { ...(args.patch as RouteSelection) }
       revision++
@@ -162,7 +162,7 @@ test('settings conflicts are fixed messages and are not automatically retried', 
     assert.equal(f.calls.filter(call => call.endpoint === 'settings/update').length, 1)
     const html = renderToStaticMarkup(createElement(RoutingStatus, { controller: f.controller }))
     assert.match(html, /已被其他操作修改/)
-    assert.doesNotMatch(html, /sk-do-not-print/)
+    assert.doesNotMatch(html, /test-credential-do-not-print/)
   } finally { f.controller.dispose() }
 })
 

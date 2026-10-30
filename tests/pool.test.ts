@@ -5,9 +5,9 @@ import { parseBalance } from '../src/balance.ts';
 import { KeyPool, PoolError, type KeyPoolRefreshTiming } from '../src/pool.ts';
 import type { CredentialStore, KeyPoolOptions, KeyStatistics, LegacyPoolMetadata, MetadataStore, PoolMetadata } from '../src/types.ts';
 
-const keyA = 'sk-test-secret-aaaaaaaa';
-const keyB = 'sk-test-secret-bbbbbbbb';
-const keyC = 'sk-test-secret-cccccccc';
+const keyA = 'test-secret-aaaaaaaa';
+const keyB = 'test-secret-bbbbbbbb';
+const keyC = 'test-secret-cccccccc';
 const balance = (amount = '10.00', available = true) => new Response(JSON.stringify({
   is_available: available, balance_infos: [{ currency: 'CNY', total_balance: amount }],
 }), { status: 200 });
@@ -228,7 +228,7 @@ test('limits aggregate balance concurrency to three', async (t) => {
     return balance();
   } });
   t.after(() => pool.stop());
-  await pool.importKeys(Array.from({ length: 8 }, (_, i) => ({ key: `sk-concurrency-secret-${i}` })));
+  await pool.importKeys(Array.from({ length: 8 }, (_, i) => ({ key: `test-credential-concurrency-secret-${i}` })));
   const refreshing = pool.refresh();
   for (let i = 0; i < 30 && total < 3; i++) await yieldTurn();
   assert.equal(total, 3);
@@ -499,7 +499,7 @@ function legacyMetadata(): LegacyPoolMetadata {
   return {
     version: 1, activeId: 'old-key', settings: { autoSwitch: true, refreshIntervalSeconds: 0 },
     keys: [{
-      id: 'old-key', credentialRef: 'OLD_KEY_REFERENCE', label: '旧 Key', maskedKey: 'sk-••••aaaa', enabled: true,
+      id: 'old-key', credentialRef: 'OLD_KEY_REFERENCE', label: '旧 Key', maskedKey: 'tes••••aaaa', enabled: true,
       status: 'error', balanceCny: '100.00', lastCheckedAt: 77, lastError: '曾经查询失败。',
     }],
   };
@@ -662,11 +662,11 @@ test('baseline deadline also bounds a queued first-use query without sending it 
     init?.signal?.addEventListener('abort', () => reject(new Error('stopped')), { once: true });
   }) }, { baselineTimeoutMs: 15 });
   t.after(() => pool.stop());
-  const { addedIds } = await pool.importKeys([keyA, keyB, keyC, 'sk-queued-extra-key'].map(key => ({ key })));
+  const { addedIds } = await pool.importKeys([keyA, keyB, keyC, 'test-credential-queued-extra-key'].map(key => ({ key })));
   const background = pool.refresh();
   await allBusy.promise;
   await pool.setActive(addedIds[3]!);
-  assert.equal((await pool.acquire()).key, 'sk-queued-extra-key');
+  assert.equal((await pool.acquire()).key, 'test-credential-queued-extra-key');
   assert.equal(calls, 3);
   pool.stop();
   await background;

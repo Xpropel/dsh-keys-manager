@@ -64,7 +64,7 @@ test('independent diagnostic writers merge under the official file lock without 
 
 test('diagnostics never serialize unknown strings, error objects, getters, or caller mutations', async () => {
   await fixture(async file => {
-    const secret = 'sk-sensitive-diagnostic-value'
+    const secret = 'test-credential-sensitive-diagnostic-value'
     const store = createRequestDiagnostics(file)
     let getterCalls = 0
     const hostile = {
@@ -98,7 +98,7 @@ test('diagnostics never serialize unknown strings, error objects, getters, or ca
 
 test('old diagnostic records are re-filtered before a subsequent atomic commit', async () => {
   await fixture(async file => {
-    const secret = 'sk-old-file-untrusted-value'
+    const secret = 'test-credential-old-file-untrusted-value'
     await mkdir(dirname(file), { recursive: true })
     await writeFile(file, JSON.stringify({ version: 1, entries: [{
       ...input(), at: 1, code: secret, networkCode: secret, errorType: secret,

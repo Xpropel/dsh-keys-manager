@@ -20,8 +20,8 @@ import { PROVIDER, registerPoolProvider } from '../src/provider.ts'
 import type { PoolMetadata } from '../src/types.ts'
 
 const OFFICIAL = 'deepseek-official'
-const syntheticKey = 'sk-parity-test-aaaaaaaa'
-const spareKey = 'sk-parity-test-bbbbbbbb'
+const syntheticKey = 'test-credential-parity-test-aaaaaaaa'
+const spareKey = 'test-credential-parity-test-bbbbbbbb'
 const sessionId = '57990d72-b251-4d62-9a90-46dc78949a4b' as GenerateOptions['sessionId']
 let isolatedHome: string
 let previousHome: string | undefined

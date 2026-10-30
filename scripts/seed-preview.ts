@@ -25,9 +25,9 @@ try {
   await pool.init()
   await pool.updateSettings({ refreshIntervalSeconds: 0 })
   const { addedIds: ids } = await pool.importKeys([
-    { label: '演示 Key A', key: 'sk-synthetic-preview-key-aaaa' },
-    { label: '演示 Key B', key: 'sk-synthetic-preview-key-bbbb' },
-    { label: '演示 Key C', key: 'sk-synthetic-preview-key-cccc' },
+    { label: '演示 Key A', key: 'test-credential-preview-key-aaaa' },
+    { label: '演示 Key B', key: 'test-credential-preview-key-bbbb' },
+    { label: '演示 Key C', key: 'test-credential-preview-key-cccc' },
   ])
   for (const value of ['10.0000', '7.2000', '12.2000', '11.9000']) { amount = value; await pool.refresh(ids[0]) }
   amount = '8.3000'; await pool.refresh(ids[1])

@@ -15,8 +15,8 @@ import { PROVIDER, credentialFailure, registerPoolProvider } from '../src/provid
 import type { PoolMetadata } from '../src/types.ts'
 
 // Only this file's isolated process and localhost server see these synthetic credentials.
-const keyA = 'sk-transport-test-aaaaaaaa'
-const keyB = 'sk-transport-test-bbbbbbbb'
+const keyA = 'test-credential-transport-test-aaaaaaaa'
+const keyB = 'test-credential-transport-test-bbbbbbbb'
 let testHome: string
 let previousHome: string | undefined
 
