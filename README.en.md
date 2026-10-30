@@ -72,10 +72,6 @@ Consumption is tracked per key from balance snapshots: a decrease counts as cons
 - The diagnostic log is `request-errors.json` in the same directory, capped at the most recent 100 entries.
 - Uninstalling the plugin does not delete this data; delete keys inside the plugin so their credentials are cleaned up too.
 
-## Compatibility
-
-Verified on Harness desktop host `0.2.1-rc.5`. The plugin does not gate loading on the Harness version number, so release and prerelease builds can both load it; if upstream removes or changes the interfaces the plugin depends on, adaptation will still be needed.
-
 ## Development
 
 Requires Node.js 22.19 or newer:
