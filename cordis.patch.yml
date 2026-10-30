@@ -1,0 +1,3 @@
+- insert:
+    - id: deepseek-key-pool
+      name: dsh-deepseek-key-pool
