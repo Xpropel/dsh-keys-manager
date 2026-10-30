@@ -23,8 +23,6 @@
   <img src="docs/screenshots/overview-collage.png" alt="API Key 池界面拼图：主页面、号池可用余额合计与 248 枚 Key 列表" width="900" />
 </p>
 
-<p align="center"><em>实拍截图，均为演示数据；Key 只显示脱敏形式。</em></p>
-
 ## 功能
 
 - **批量导入**：每批 1–200 枚 Key，支持 `名称 | Key` 命名；重复自动跳过，列表只显示脱敏 Key

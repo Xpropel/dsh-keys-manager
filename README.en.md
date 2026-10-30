@@ -23,8 +23,6 @@
   <img src="docs/screenshots/overview-collage.png" alt="Key pool UI collage: main page, pool-wide balance total and the 248-key list" width="900" />
 </p>
 
-<p align="center"><em>Real UI captures with demo data; keys are shown masked only.</em></p>
-
 ## Features
 
 - **Bulk import**: 1–200 keys per batch, optional `Label | Key` naming; duplicates are skipped and the list only ever shows masked keys
