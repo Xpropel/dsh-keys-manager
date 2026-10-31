@@ -75,7 +75,10 @@ export function parseSnapshot(value: unknown): PoolSnapshot {
       const event = record(value)
       const kind = text(event.kind)
       if (!['switch', 'exhausted', 'invalid', 'recovered'].includes(kind)) throw new Error('INVALID_POOL_RESPONSE')
-      return { id: text(event.id), at: number(event.at), kind: kind as PoolEvent['kind'], message: text(event.message) }
+      return {
+        id: text(event.id), at: number(event.at), kind: kind as PoolEvent['kind'], message: text(event.message),
+        ...(event.keyLabel === undefined ? {} : { keyLabel: text(event.keyLabel) }),
+      }
     }),
   }
 }

@@ -27,7 +27,6 @@ export function PoolBalanceCard({ keys, t }: { keys: readonly KeyView[]; t: Tran
     <p className="dskp-pool-snapshot">{summary.oldestObservedAt !== null ? t('poolBalanceOldest', { time: timeLabel(summary.oldestObservedAt) })
       : summary.enabledCount === 0 ? t('poolBalanceNoEnabled')
         : summary.missingCount === 0 ? t('poolBalanceNoneAvailable') : null}</p>
-    <p className="dskp-pool-rule">{t('poolBalanceRule')}</p>
   </section>
 }
 
@@ -42,8 +41,6 @@ export function PoolConsumptionCard({ keys, t }: { keys: readonly KeyView[]; t: 
       : summary.missingCount > 0 && <div className="dskp-pool-incomplete"><strong>{t('poolConsumptionPartial')}</strong></div>}
     {summary.missingCount > 0 && <p className="dskp-pool-missing">{t('poolConsumptionMissing', { count: summary.missingCount })}</p>}
     {summary.trackedCount > 0 && <p className="dskp-pool-snapshot">{summary.oldestUpdatedAt === null ? t('poolConsumptionSnapshot') : t('poolConsumptionOldest', { time: timeLabel(summary.oldestUpdatedAt) })}</p>}
-    <p className="dskp-pool-rule">{t('poolConsumptionRule')}</p>
-    <p className="dskp-pool-method">{t('poolConsumptionMethod')}</p>
   </section>
 }
 

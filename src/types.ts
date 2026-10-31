@@ -94,6 +94,8 @@ export interface PoolEvent {
   at: number;
   kind: 'switch' | 'exhausted' | 'invalid' | 'recovered';
   message: string;
+  /** Label of the key the event is about; absent on events recorded before this field existed. */
+  keyLabel?: string;
 }
 
 export interface MetadataStore {

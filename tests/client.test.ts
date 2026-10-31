@@ -97,6 +97,15 @@ test('snapshot parsing retains the public state and strips unknown secret-bearin
   assert.equal(parsed.keys[0]!.balanceCny, '12345678901234567890.000100')
 })
 
+test('snapshot parsing keeps an event key label for the history table', () => {
+  const supplied = snapshot()
+  supplied.events = [{ id: 'event-9', at: 1_792_672_000_000, kind: 'exhausted', message: '演示 Key A：余额不足。', keyLabel: '演示 Key A' }]
+  const parsed = parseSnapshot(supplied)
+  assert.equal(parsed.events[0]!.keyLabel, '演示 Key A')
+  const unlabeled = snapshot()
+  assert.equal(parseSnapshot(unlabeled).events[0]!.keyLabel, undefined)
+})
+
 test('mismatched snapshot versions or field types fail before reaching the panel', () => {
   const valid = snapshot()
   const invalid: unknown[] = [
@@ -283,8 +292,8 @@ test('the pool consumption card reveals historical usage outside the current key
   assert.match(html, /8\.3750/)
   assert.match(html, /统计覆盖 2 \/ 3 枚 Key/)
   assert.match(html, /1 枚尚未开始统计/)
-  assert.match(html, /包含停用、耗尽 Key/)
-  assert.match(html, /非精确账单/)
+  assert.doesNotMatch(html, /包含停用、耗尽 Key/)
+  assert.doesNotMatch(html, /非精确账单/)
 })
 
 test('the pool consumption card distinguishes no baseline from a measured zero', () => {

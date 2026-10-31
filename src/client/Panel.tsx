@@ -4,7 +4,7 @@ import { panelStyles } from './styles.ts'
 import { translateZh, type KeyPoolCopyKey, type Translate } from './locales.ts'
 import type { KeyView, PoolAction, PoolRequest, PoolView } from './types.ts'
 import { PoolRequestError } from './request.ts'
-import { timeLabel } from './format.ts'
+import { clockLabel, dateLabel, timeLabel } from './format.ts'
 import { ActiveKeySummary, BalanceValue, ConsumptionValue, PoolBalanceCard, PoolConsumptionCard } from './Statistics.tsx'
 import { useKeyListViewport } from './useKeyListViewport.ts'
 
@@ -37,6 +37,8 @@ export function parseImport(text: string): { label?: string; key: string }[] {
     return { key, ...(label ? { label } : {}) }
   })
 }
+
+const EVENT_KIND_KEYS = { switch: 'eventSwitch', exhausted: 'eventExhausted', invalid: 'eventInvalid', recovered: 'eventRecovered' } as const
 
 export interface KeyPoolPanelProps {
   request: PoolRequest
@@ -170,7 +172,6 @@ export function KeyPoolPanel({ request, t = translateZh }: KeyPoolPanelProps) {
     <header className="dskp-header">
       <div>
         <div className="dskp-heading"><span className="dskp-logo"><Icon name="key"/></span><h2 id={`${id}-title`}>{t('title')}</h2></div>
-        <p className="dskp-subtitle">{t('subtitle')}</p>
         {snapshot && <div className={`dskp-status dskp-mode ${snapshot.settings.autoSwitch ? 'ready' : ''}`}>{t(snapshot.settings.autoSwitch ? 'automatic' : 'manual')}</div>}
       </div>
       <div className="dskp-header-actions">
@@ -178,8 +179,6 @@ export function KeyPoolPanel({ request, t = translateZh }: KeyPoolPanelProps) {
         <button type="button" className="dskp-button primary" disabled={!!busy || !snapshot} onClick={() => setImportOpen(open => !open)}><Icon name="plus"/>{t('import')}</button>
       </div>
     </header>
-
-    <p className="dskp-note" style={{ marginBottom: 16 }}><Icon name="info"/><span>{t('routeHint')}</span></p>
 
     <div className="dskp-feedback-slot">{feedback && <div role={feedback.error ? 'alert' : 'status'} className={`dskp-feedback${feedback.error ? ' error' : ''}`}>{feedback.detail ?? t(feedback.key)}</div>}</div>
     {loadFailed && <div role="alert" className="dskp-feedback error">{t('loadFailed')} <button className="dskp-button small" disabled={!!busy} onClick={() => { void mutate('snapshot') }}>{t('retry')}</button></div>}
@@ -199,10 +198,10 @@ export function KeyPoolPanel({ request, t = translateZh }: KeyPoolPanelProps) {
     {!snapshot ? <div className="dskp-card dskp-empty" role="status">{t(loadFailed ? 'loadFailed' : 'loading')}</div> : <>
       <div className="dskp-pool-overview"><PoolBalanceCard keys={snapshot.keys} t={t}/><PoolConsumptionCard keys={snapshot.keys} t={t}/></div>
       <ActiveKeySummary entry={active} t={t}/>
-      <div className="dskp-list-heading"><div><span>{t('keysSummary', { count: snapshot.keys.length, ready: readyCount })}</span>{snapshot.keys.length > 0 && <p id={`${id}-list-hint`} className="dskp-list-hint">{t('keyListScrollHint')}</p>}</div><button className="dskp-button small" type="button" disabled={!keyList.hasCurrent} aria-controls={`${id}-key-list`} onClick={keyList.locateCurrent}>{t('locateCurrent')}</button></div>
+      <div className="dskp-list-heading"><div><span>{t('keysSummary', { count: snapshot.keys.length, ready: readyCount })}</span></div><button className="dskp-button small" type="button" disabled={!keyList.hasCurrent} aria-controls={`${id}-key-list`} onClick={keyList.locateCurrent}>{t('locateCurrent')}</button></div>
 
       <div className="dskp-card">
-        {!snapshot.keys.length ? <div className="dskp-empty"><span className="dskp-empty-icon"><Icon name="key"/></span><h3>{t('emptyTitle')}</h3><p>{t('emptyDescription')}</p><button className="dskp-button primary" onClick={() => setImportOpen(true)}><Icon name="plus"/>{t('import')}</button></div> : <div className="dskp-table-wrap" ref={keyList.ref} id={`${id}-key-list`} tabIndex={0} role="region" aria-label={t('keyListRegion')} aria-describedby={`${id}-list-hint`}><table className="dskp-table">
+        {!snapshot.keys.length ? <div className="dskp-empty"><span className="dskp-empty-icon"><Icon name="key"/></span><h3>{t('emptyTitle')}</h3><p>{t('emptyDescription')}</p><button className="dskp-button primary" onClick={() => setImportOpen(true)}><Icon name="plus"/>{t('import')}</button></div> : <div className="dskp-table-wrap" ref={keyList.ref} id={`${id}-key-list`} tabIndex={0} role="region" aria-label={t('keyListRegion')}><table className="dskp-table">
           <thead><tr><th scope="col">{t('priority')}</th><th scope="col">{t('name')}</th><th scope="col">{t('balance')}</th><th scope="col">{t('consumed')}</th><th scope="col">{t('state')}</th><th scope="col" style={{ textAlign: 'right' }}>{t('actions')}</th></tr></thead>
           <tbody>{snapshot.keys.map((key, index) => <tr key={key.id} data-key-id={key.id} className={key.id === snapshot.activeId ? 'is-current' : undefined}>
             <td><div className="dskp-order"><span>{String(index + 1).padStart(2, '0')}</span><div><button className="dskp-icon-button" disabled={!!busy || index === 0} aria-label={t('moveUp', { name: key.label })} title={t('moveUp', { name: key.label })} onClick={() => reorder(index, -1)}><Icon name="up"/></button><button className="dskp-icon-button" disabled={!!busy || index === snapshot.keys.length - 1} aria-label={t('moveDown', { name: key.label })} title={t('moveDown', { name: key.label })} onClick={() => reorder(index, 1)}><Icon name="down"/></button></div></div></td>
@@ -219,21 +218,26 @@ export function KeyPoolPanel({ request, t = translateZh }: KeyPoolPanelProps) {
           </tr>)}</tbody>
         </table></div>}
       </div>
-      {snapshot.keys.length > 1 && <p className="dskp-note">{t('orderHint')}</p>}
-      <p className="dskp-note"><Icon name="info"/><span>{t('balanceHint')}</span></p>
-      <p className="dskp-note"><Icon name="info"/><span>{t('statisticsHint')}</span></p>
-
       <section className="dskp-settings" aria-labelledby={`${id}-policy`}>
-        <div className="dskp-section-head"><div><h3 id={`${id}-policy`}>{t('settingsTitle')}</h3><p>{t('settingsDescription')}</p></div><button className="dskp-button small" disabled={!!busy || !dirty} onClick={() => { void saveSettings() }}>{t('saveSettings')}</button></div>
+        <div className="dskp-section-head"><div><h3 id={`${id}-policy`}>{t('settingsTitle')}</h3></div><button className="dskp-button small" disabled={!!busy || !dirty} onClick={() => { void saveSettings() }}>{t('saveSettings')}</button></div>
         <div className="dskp-card">
-          <div className="dskp-setting-row"><div><div className="dskp-setting-label" id={`${id}-auto`}>{t('autoSwitchLabel')}</div><p className="dskp-setting-hint">{t('autoSwitchHint')}</p></div><button className="dskp-switch" type="button" role="switch" aria-checked={autoSwitch} aria-labelledby={`${id}-auto`} disabled={!!busy} onClick={() => { setAutoSwitch(value => !value); dirtyRef.current = true; setDirty(true) }}><span/></button></div>
-          <div className="dskp-setting-row"><div><label htmlFor={`${id}-interval`} className="dskp-setting-label">{t('intervalLabel')}</label><p id={`${id}-interval-hint`} className="dskp-setting-hint">{t('intervalHint')}</p></div><input id={`${id}-interval`} className="dskp-number" type="number" min="0" max="86400" step="1" inputMode="numeric" value={interval} aria-describedby={`${id}-interval-hint`} disabled={!!busy} onChange={event => { setIntervalValue(event.target.value); dirtyRef.current = true; setDirty(true) }}/></div>
+          <div className="dskp-setting-row"><div><div className="dskp-setting-label" id={`${id}-auto`}>{t('autoSwitchLabel')}</div></div><button className="dskp-switch" type="button" role="switch" aria-checked={autoSwitch} aria-labelledby={`${id}-auto`} disabled={!!busy} onClick={() => { setAutoSwitch(value => !value); dirtyRef.current = true; setDirty(true) }}><span/></button></div>
+          <div className="dskp-setting-row"><div><label htmlFor={`${id}-interval`} className="dskp-setting-label">{t('intervalLabel')}</label></div><input id={`${id}-interval`} className="dskp-number" type="number" min="0" max="86400" step="1" inputMode="numeric" value={interval} disabled={!!busy} onChange={event => { setIntervalValue(event.target.value); dirtyRef.current = true; setDirty(true) }}/></div>
         </div>
       </section>
 
       <section className="dskp-history" aria-labelledby={`${id}-history`}>
-        <div className="dskp-section-head"><div><h3 id={`${id}-history`}>{t('history')}</h3><p>{t('historyHint')}</p></div><Icon name="history"/></div>
-        <div className="dskp-card dskp-history-body">{events.length === 0 ? <p className="dskp-history-empty">{t('historyEmpty')}</p> : events.slice(-12).reverse().map(event => <div className="dskp-event" key={event.id}><time dateTime={new Date(event.at).toISOString()}>{timeLabel(event.at)}</time><span>{event.message}</span></div>)}</div>
+        <div className="dskp-section-head"><div><h3 id={`${id}-history`}>{t('history')}</h3></div><Icon name="history"/></div>
+        <div className="dskp-card dskp-history-body">{events.length === 0 ? <p className="dskp-history-empty">{t('historyEmpty')}</p> : <table className="dskp-table dskp-event-table">
+          <thead><tr><th scope="col">{t('eventDate')}</th><th scope="col">{t('eventTime')}</th><th scope="col">{t('eventAction')}</th><th scope="col">{t('eventKey')}</th><th scope="col">{t('eventDetail')}</th></tr></thead>
+          <tbody>{events.slice(-12).reverse().map(event => <tr key={event.id}>
+            <td className="dskp-event-time">{dateLabel(event.at)}</td>
+            <td className="dskp-event-time">{clockLabel(event.at)}</td>
+            <td>{t(EVENT_KIND_KEYS[event.kind])}</td>
+            <td><span className="dskp-key-name">{event.keyLabel ?? '—'}</span></td>
+            <td>{event.message}</td>
+          </tr>)}</tbody>
+        </table>}</div>
       </section>
     </>}
   </section>

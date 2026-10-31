@@ -112,6 +112,8 @@ export const zh = {
   history: '切换与状态记录',
   historyHint: '仅保留当前运行期间的最近记录，不包含完整 Key。',
   historyEmpty: '还没有记录。发生切换或状态变化后会显示在这里。',
+  eventDate: '日期', eventTime: '时间', eventAction: '动作', eventKey: '名称', eventDetail: '说明',
+  eventSwitch: '切换', eventExhausted: '余额不足', eventInvalid: '失效', eventRecovered: '恢复',
   updatedAgo: '面板已同步',
   unnamed: '未命名 Key',
 } satisfies Record<string, string>
@@ -175,6 +177,8 @@ export const en = {
   intervalInvalid: 'Use 0, or an integer from 30 to 86400 seconds.', saveSettings: 'Save policy',
   history: 'Switching and status history', historyHint: 'Recent events from this running session only. Full keys are never included.',
   historyEmpty: 'No events yet. Key switches and status changes will appear here.', updatedAgo: 'Panel synchronized', unnamed: 'Unnamed key',
+  eventDate: 'Date', eventTime: 'Time', eventAction: 'Action', eventKey: 'Key', eventDetail: 'Details',
+  eventSwitch: 'Switch', eventExhausted: 'Insufficient balance', eventInvalid: 'Invalid', eventRecovered: 'Recovered',
 } satisfies Record<KeyPoolCopyKey, string>
 
 /** Chinese fallback used by the standalone preview and before host locale injection. */

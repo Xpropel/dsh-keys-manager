@@ -741,22 +741,22 @@ export class KeyPool {
     for (const entry of next.keys) {
       const previous = this.state.keys.find((candidate) => candidate.id === entry.id);
       if (!previous || previous.status === entry.status) continue;
-      if (entry.status === 'invalid') this.record('invalid', `${entry.label}：${entry.lastError ?? '凭据不可用。'}`);
-      else if (entry.status === 'exhausted') this.record('exhausted', `${entry.label}：${entry.lastError ?? '余额不足。'}`);
+      if (entry.status === 'invalid') this.record('invalid', `${entry.label}：${entry.lastError ?? '凭据不可用。'}`, entry.label);
+      else if (entry.status === 'exhausted') this.record('exhausted', `${entry.label}：${entry.lastError ?? '余额不足。'}`, entry.label);
       else if (entry.status === 'ready' && (previous.status === 'invalid' || previous.status === 'exhausted')) {
-        this.record('recovered', `${entry.label}：已恢复可用。`);
+        this.record('recovered', `${entry.label}：已恢复可用。`, entry.label);
       }
     }
     if (next.activeId !== this.state.activeId) {
       const from = this.state.keys.find((entry) => entry.id === this.state.activeId)?.label ?? '无';
       const to = next.keys.find((entry) => entry.id === next.activeId)?.label ?? '无';
-      this.record('switch', `当前 Key：${from} → ${to}`);
+      this.record('switch', `当前 Key：${from} → ${to}`, to === '无' ? undefined : to);
     }
     this.state = next;
   }
 
-  private record(kind: PoolEvent['kind'], message: string): void {
-    this.events.push({ id: randomUUID(), at: this.now(), kind, message });
+  private record(kind: PoolEvent['kind'], message: string, keyLabel?: string): void {
+    this.events.push({ id: randomUUID(), at: this.now(), kind, message, ...(keyLabel ? { keyLabel } : {}) });
     this.events = this.events.slice(-50);
   }
 

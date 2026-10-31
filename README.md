@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Xpropel/dsh-keys-manager/releases/tag/v0.6.4"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
+  <a href="https://github.com/Xpropel/dsh-keys-manager/releases/tag/v0.6.5"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
   <img alt="Tests: 194 passing" src="https://img.shields.io/badge/tests-194%20passing-brightgreen?style=flat-square" />
   <img alt="Node 22.19+" src="https://img.shields.io/badge/node-%3E%3D22.19-339933?style=flat-square" />
   <img alt="DeepSeek Harness plugin" src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE?style=flat-square" />
@@ -34,7 +34,7 @@
 
 ## 安装
 
-1. 从 [Releases](https://github.com/Xpropel/dsh-keys-manager/releases) 下载 `dsh-deepseek-key-pool-0.6.4.tgz`。
+1. 从 [Releases](https://github.com/Xpropel/dsh-keys-manager/releases) 下载 `dsh-deepseek-key-pool-0.6.5.tgz`。
 2. 在 DeepSeek Harness 桌面端打开 **插件 → 添加插件 → 安装第三方插件**，填写安装包的绝对路径，完成安装并启用插件。
 3. 在左侧栏打开 **API Key 池**。
 

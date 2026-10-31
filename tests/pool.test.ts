@@ -364,6 +364,19 @@ test('balance parser rejects malformed amounts and does not infer availability',
   }
 });
 
+test('status and switch events carry the key label for the history table', async (t) => {
+  const { pool } = fixture();
+  t.after(() => pool.stop());
+  const { addedIds: [first, second] } = await pool.importKeys([{ key: keyA, label: '甲' }, { key: keyB, label: '乙' }]);
+  await pool.refresh();
+  await pool.setActive(second!);
+  const events = pool.snapshot().events;
+  const switched = events.filter((event) => event.kind === 'switch').at(-1);
+  assert.equal(switched?.keyLabel, '乙');
+  assert.equal(switched?.message, '当前 Key：甲 → 乙');
+  assert.ok(first);
+});
+
 const foreignBalance = (infos: Array<{ currency: string; total_balance: string }>, available = true) =>
   new Response(JSON.stringify({ is_available: available, balance_infos: infos }), { status: 200 });
 
