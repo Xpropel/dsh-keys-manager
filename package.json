@@ -1,6 +1,6 @@
 {
   "name": "dsh-deepseek-key-pool",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "DeepSeek Harness 官方 API Key 池：人民币余额、优先级管理与余额不足自动切换",
   "type": "module",
   "license": "MIT",
