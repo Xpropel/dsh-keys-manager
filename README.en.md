@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Xpropel/dsh-keys-manager/releases/tag/v0.6.2"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
+  <a href="https://github.com/Xpropel/dsh-keys-manager/releases/tag/v0.6.3"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
   <img alt="Tests: 194 passing" src="https://img.shields.io/badge/tests-194%20passing-brightgreen?style=flat-square" />
   <img alt="Node 22.19+" src="https://img.shields.io/badge/node-%3E%3D22.19-339933?style=flat-square" />
   <img alt="DeepSeek Harness plugin" src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE?style=flat-square" />
@@ -26,7 +26,7 @@
 ## Features
 
 - **Bulk import**: 1–200 keys per batch, optional `Label | Key` naming; duplicates are skipped and the list only ever shows masked keys
-- **Balance checks**: CNY balance per key via the official balance endpoint, computed with exact BigInt decimal arithmetic; pool-wide available total and cumulative consumption at the top of the page
+- **Balance checks**: per-key balances via the official balance endpoint — USD and other currencies included, converted to CNY at live exchange rates — computed with exact BigInt decimal arithmetic; pool-wide available total and cumulative consumption at the top of the page
 - **Priority management**: set current key, move up/down, enable/disable, delete (which also removes that key's dedicated credential)
 - **Automatic failover**: only an explicit HTTP `402` (insufficient balance) from a model request triggers a switch to the next available key by priority; all other errors are passed back to the official handling untouched
 - **Official alignment**: normal requests reuse the official provider's live configuration, model catalog and transport — no second set of parameters to drift
@@ -34,7 +34,7 @@
 
 ## Installation
 
-1. Download `dsh-deepseek-key-pool-0.6.2.tgz` from [Releases](https://github.com/Xpropel/dsh-keys-manager/releases).
+1. Download `dsh-deepseek-key-pool-0.6.3.tgz` from [Releases](https://github.com/Xpropel/dsh-keys-manager/releases).
 2. In the DeepSeek Harness desktop app, open **Plugins → Add plugin → Install third-party plugin**, enter the absolute path of the package, install and enable it.
 3. Open **API Key Pool** in the sidebar.
 

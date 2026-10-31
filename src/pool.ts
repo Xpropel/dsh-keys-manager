@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { parseBalance, type BalanceObservation } from './balance.ts';
+import { parseBalance, totalInCny, type BalanceObservation } from './balance.ts';
+import { fetchCnyRate } from './fx.ts';
 import { addDecimals, compareDecimals, isDecimalString, subtractDecimals } from './money.ts';
 import type {
   AcquiredKey, ImportKeyInput, ImportKeysResult, KeyMetadata, KeyPoolOptions,
-  BalanceObservationSource, KeyStatus, KeyStatistics, PoolEvent, PoolMetadata, PoolSettings, PoolSnapshot, StoredPoolMetadata,
+  BalanceObservationSource, CurrencyBalance, FxRate, KeyStatus, KeyStatistics, PoolEvent, PoolMetadata, PoolSettings, PoolSnapshot, StoredPoolMetadata,
 } from './types.ts';
 
 export type PoolErrorCode = 'VALIDATION' | 'NOT_FOUND' | 'NO_AVAILABLE_KEY' |
@@ -55,6 +56,8 @@ function withSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 }
 
 const defaults: PoolSettings = { autoSwitch: true, refreshIntervalSeconds: 300 };
+/** Cached exchange rates are refreshed at most twice a day; stale rates remain usable offline. */
+const FX_MAX_AGE_MS = 12 * 3600 * 1000;
 const emptyMetadata = (): PoolMetadata => ({ version: 2, keys: [], activeId: null, settings: { ...defaults } });
 const emptyStatistics = (): KeyStatistics => ({
   initialBalanceCny: null, lastObservedCny: null, totalConsumedCny: '0', totalAddedCny: '0',
@@ -151,19 +154,45 @@ function validateMetadata(value: StoredPoolMetadata): PoolMetadata {
         (balanceObservationSource === 'unavailable-zero' && balanceObservedAt === null)) {
       throw new PoolError('STORAGE_ERROR', 'Key 余额观察记录格式无效。');
     }
+    let balances: CurrencyBalance[] | undefined;
+    if (value.version === 2 && current.balances !== undefined) {
+      if (!Array.isArray(current.balances) || current.balances.length > 16 ||
+          current.balances.some((item) => !item || typeof item.currency !== 'string' || !/^[A-Z]{3}$/.test(item.currency) ||
+            !isDecimalString(item.amount, 100))) {
+        throw new PoolError('STORAGE_ERROR', 'Key 余额明细格式无效。');
+      }
+      balances = current.balances.map((item) => ({ currency: item.currency, amount: item.amount }));
+    }
     // Explicitly select known fields so unexpected properties never reach snapshots.
     return {
       id: entry.id, credentialRef: entry.credentialRef, label: entry.label,
       maskedKey: entry.maskedKey, enabled: entry.enabled, status: entry.status,
       balanceCny: entry.balanceCny, lastCheckedAt: entry.lastCheckedAt, lastError: entry.lastError,
       balanceObservationSource, balanceObservedAt,
+      ...(balances ? { balances } : {}),
       statistics: value.version === 1 ? emptyStatistics() : validateStatistics((entry as KeyMetadata).statistics),
     };
   });
+  let fxRates: Record<string, FxRate> | undefined;
+  const storedFx = value.version === 2 ? (value as PoolMetadata).fxRates : undefined;
+  if (storedFx !== undefined) {
+    if (!storedFx || typeof storedFx !== 'object' || Array.isArray(storedFx)) {
+      throw new PoolError('STORAGE_ERROR', '汇率缓存格式无效。');
+    }
+    fxRates = {};
+    for (const [currency, rate] of Object.entries(storedFx)) {
+      if (!/^[A-Z]{3}$/.test(currency) || !rate || !isDecimalString(rate.rateCny, 32) ||
+          !Number.isSafeInteger(rate.fetchedAt) || rate.fetchedAt < 0) {
+        throw new PoolError('STORAGE_ERROR', '汇率缓存格式无效。');
+      }
+      fxRates[currency] = { rateCny: rate.rateCny, fetchedAt: rate.fetchedAt };
+    }
+  }
   return {
     version: 2, keys,
     activeId: typeof value.activeId === 'string' && ids.has(value.activeId) ? value.activeId : null,
     settings: validatedSettings(value.settings),
+    ...(fxRates && Object.keys(fxRates).length ? { fxRates } : {}),
   };
 }
 
@@ -189,6 +218,7 @@ export class KeyPool {
   private stopped = false;
   private refreshRunning = 0;
   private refreshWaiters: Array<() => void> = [];
+  private readonly fxRates = new Map<string, FxRate>();
 
   constructor(private readonly options: KeyPoolOptions, timing: Partial<KeyPoolRefreshTiming> = {}) {
     this.fetcher = options.fetch ?? globalThis.fetch;
@@ -218,6 +248,7 @@ export class KeyPool {
         catch { throw new PoolError('STORAGE_ERROR', '无法升级 Key 累计统计配置。'); }
       }
       this.state = next;
+      if (next.fxRates) for (const [currency, rate] of Object.entries(next.fxRates)) this.fxRates.set(currency, rate);
       for (const entry of this.state.keys) this.generations.set(entry.id, 0);
       this.configureTimer();
     })();
@@ -227,7 +258,10 @@ export class KeyPool {
   snapshot(): PoolSnapshot {
     const { keys, activeId, settings } = this.state;
     return {
-      keys: keys.map(({ credentialRef: _ref, ...entry }) => ({ ...entry, statistics: { ...entry.statistics } })),
+      keys: keys.map(({ credentialRef: _ref, ...entry }) => ({
+        ...entry, statistics: { ...entry.statistics },
+        ...(entry.balances ? { balances: entry.balances.map((item) => ({ ...item })) } : {}),
+      })),
       activeId, settings: { ...settings }, events: this.events.map((event) => ({ ...event })),
     };
   }
@@ -271,7 +305,7 @@ export class KeyPool {
             id, credentialRef: `DSH_KEY_POOL_${id.replaceAll('-', '_').toUpperCase()}`,
             label: input.label || `Key ${next.keys.length + 1}`,
             maskedKey: input.key.length > 8 ? `${input.key.slice(0, 3)}••••${input.key.slice(-4)}` : '••••••••',
-            enabled: true, status: 'unknown', balanceCny: null, lastCheckedAt: null, lastError: null,
+            enabled: true, status: 'unknown', balanceCny: null, balances: [], lastCheckedAt: null, lastError: null,
             balanceObservationSource: null, balanceObservedAt: null,
             statistics: emptyStatistics(),
           };
@@ -494,6 +528,7 @@ export class KeyPool {
     let update: {
       status: KeyStatus; lastError: string | null; balanceCny?: string | null;
       balanceObservationSource?: BalanceObservationSource | null;
+      balances?: CurrencyBalance[];
     };
     let observation: BalanceObservation | null = null;
     try {
@@ -510,11 +545,27 @@ export class KeyPool {
         else if (!response.ok) update = { status: 'error', lastError: `余额查询失败（HTTP ${response.status}）。` };
         else {
           const parsed = parseBalance(await response.json());
-          observation = parsed.statisticsObservation;
+          let total: string | null = null;
+          let fxIncomplete = false;
+          if (parsed.entries.length === 0) {
+            if (!parsed.available) observation = { balanceCny: '0', source: 'unavailable-zero' };
+          } else {
+            total = totalInCny(parsed.entries, await this.resolveRates(parsed.entries));
+            if (total !== null) observation = { balanceCny: total, source: 'api' };
+            else fxIncomplete = true;
+          }
           update = {
-            status: parsed.available ? 'ready' : 'exhausted', balanceCny: parsed.balanceCny,
-            balanceObservationSource: parsed.statisticsObservation?.source ?? null,
-            lastError: parsed.available ? null : '账户当前余额不可用于 API 调用。',
+            status: parsed.available ? 'ready' : 'exhausted',
+            // A successful response whose total cannot be converted clears the
+            // converted observation, exactly like any unusable balance response;
+            // statistics are never fed unconverted amounts.
+            ...(fxIncomplete ? { balanceCny: null, balanceObservationSource: null } : {
+              balanceCny: total,
+              balanceObservationSource: observation?.source ?? null,
+            }),
+            lastError: !parsed.available ? '账户当前余额不可用于 API 调用。'
+              : fxIncomplete ? '汇率获取失败，外币余额暂未换算为人民币计入。' : null,
+            balances: parsed.entries,
           };
         }
         if (!response.ok) {
@@ -545,8 +596,37 @@ export class KeyPool {
       if (update.balanceObservationSource !== undefined) entry.balanceObservedAt = observation !== null ? checkedAt : null;
       if (observation !== null) entry.statistics = observeStatistics(entry.statistics, observation, checkedAt);
       this.selectFallback(next);
+      if (this.fxRates.size) {
+        next.fxRates = Object.fromEntries([...this.fxRates].map(([currency, rate]) => [currency, { ...rate }]));
+      }
       await this.commit(next);
     });
+  }
+
+  /** Fresh cached rates win; on fetch failure a stale cached rate still beats no total. */
+  private async resolveRates(entries: readonly CurrencyBalance[]): Promise<Map<string, string>> {
+    const rates = new Map<string, string>();
+    const wanted = [...new Set(entries.map((entry) => entry.currency).filter((currency) => currency !== 'CNY'))];
+    for (const currency of wanted) {
+      const cached = this.fxRates.get(currency);
+      if (cached && this.now() - cached.fetchedAt < FX_MAX_AGE_MS) {
+        rates.set(currency, cached.rateCny);
+        continue;
+      }
+      let fetched: string | null = null;
+      try {
+        fetched = this.options.rateProvider
+          ? await this.options.rateProvider(currency)
+          : await fetchCnyRate(this.fetcher, currency, AbortSignal.timeout(8000));
+      } catch { fetched = null; }
+      if (fetched !== null && isDecimalString(fetched, 32)) {
+        this.fxRates.set(currency, { rateCny: fetched, fetchedAt: this.now() });
+        rates.set(currency, fetched);
+      } else if (cached) {
+        rates.set(currency, cached.rateCny);
+      }
+    }
+    return rates;
   }
 
   private async withRefreshSlot(work: () => Promise<void>, priority = false): Promise<void> {

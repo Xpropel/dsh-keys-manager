@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { addDecimals, compareDecimals, isDecimalString, subtractDecimals } from '../src/money.ts';
+import { addDecimals, compareDecimals, isDecimalString, multiplyDecimals, subtractDecimals } from '../src/money.ts';
 
 test('decimal arithmetic stays exact above Number safe integer and below floating-point precision', () => {
   assert.equal(subtractDecimals('9007199254740993.00000000000000000001', '9007199254740993.00000000000000000000'), '0.00000000000000000001');
   assert.equal(addDecimals('9007199254740993.00000000000000000001', '0.00000000000000000009'), '9007199254740993.00000000000000000010');
   assert.equal(subtractDecimals('0.3', '0.2'), '0.1');
   assert.equal(addDecimals('0.1', '0.2'), '0.3');
+});
+
+test('multiplication converts currencies exactly and rounds half-up to the result scale', () => {
+  assert.equal(multiplyDecimals('10', '7.2'), '72.0000');
+  assert.equal(multiplyDecimals('8.3000', '7.2134'), '59.8712');
+  assert.equal(multiplyDecimals('0.00005', '1'), '0.0001');
+  assert.equal(multiplyDecimals('0.00004', '1'), '0.0000');
+  assert.equal(multiplyDecimals('-1.005', '2'), '-2.0100');
+  assert.equal(multiplyDecimals('3', '0.333333'), '1.0000');
 });
 
 test('different scales align while retaining the finest observed decimal scale', () => {

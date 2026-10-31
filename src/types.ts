@@ -9,6 +9,18 @@ export type KeyStatus = 'unknown' | 'ready' | 'exhausted' | 'invalid' | 'error';
 
 export type BalanceObservationSource = 'api' | 'unavailable-zero';
 
+/** One currency balance exactly as reported by the API, before any conversion. */
+export interface CurrencyBalance {
+  currency: string;
+  amount: string;
+}
+
+/** A cached exchange rate: the CNY value of one unit of a foreign currency. */
+export interface FxRate {
+  rateCny: string;
+  fetchedAt: number;
+}
+
 /** Cumulative changes observed since the first successful CNY observation. */
 export interface KeyStatistics {
   initialBalanceCny: string | null;
@@ -26,8 +38,10 @@ export interface KeySnapshot {
   maskedKey: string;
   enabled: boolean;
   status: KeyStatus;
-  /** Exact CNY decimal string from the API; null when unavailable. */
+  /** Total balance converted to CNY; null when unavailable or a rate is missing. */
   balanceCny: string | null;
+  /** Native per-currency balances from the latest successful check; absent before the first one. */
+  balances?: CurrencyBalance[];
   /** Evidence behind the most recent successful CNY balance observation. */
   balanceObservationSource: BalanceObservationSource | null;
   /** Amount observation time; a failed refresh never advances this timestamp. */
@@ -53,6 +67,8 @@ export interface PoolMetadata {
   keys: KeyMetadata[];
   activeId: string | null;
   settings: PoolSettings;
+  /** Last known exchange rates, kept so foreign balances still convert offline. */
+  fxRates?: Record<string, FxRate>;
 }
 
 /** Prior persisted format: cached balances are not historical statistics. */
@@ -106,4 +122,6 @@ export interface KeyPoolOptions {
   fetch?: typeof globalThis.fetch;
   now?: () => number;
   refreshTimeoutMs?: number;
+  /** Resolve the CNY value of one unit of a currency; null when no rate is available. */
+  rateProvider?: (currency: string) => Promise<string | null>;
 }

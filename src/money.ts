@@ -52,6 +52,22 @@ export function subtractDecimals(left: string, right: string): string {
   return format(values.left - values.right, values.scale);
 }
 
+/** Exact product rounded half-up (on magnitude) to a fixed result scale, e.g. for currency conversion. */
+export function multiplyDecimals(left: string, right: string, resultScale = 4): string {
+  const a = parse(left);
+  const b = parse(right);
+  const coefficient = a.coefficient * b.coefficient;
+  const scale = a.scale + b.scale;
+  if (scale <= resultScale) return format(coefficient * 10n ** BigInt(resultScale - scale), resultScale);
+  const divisor = 10n ** BigInt(scale - resultScale);
+  const negative = coefficient < 0n;
+  const magnitude = negative ? -coefficient : coefficient;
+  const quotient = magnitude / divisor;
+  const remainder = magnitude % divisor;
+  const rounded = remainder * 2n >= divisor ? quotient + 1n : quotient;
+  return format(negative ? -rounded : rounded, resultScale);
+}
+
 export function compareDecimals(left: string, right: string): -1 | 0 | 1 {
   const values = align(left, right);
   return values.left < values.right ? -1 : values.left > values.right ? 1 : 0;

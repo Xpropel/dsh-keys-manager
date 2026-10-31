@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Xpropel/dsh-keys-manager/releases/tag/v0.6.2"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
+  <a href="https://github.com/Xpropel/dsh-keys-manager/releases/tag/v0.6.3"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
   <img alt="Tests: 194 passing" src="https://img.shields.io/badge/tests-194%20passing-brightgreen?style=flat-square" />
   <img alt="Node 22.19+" src="https://img.shields.io/badge/node-%3E%3D22.19-339933?style=flat-square" />
   <img alt="DeepSeek Harness plugin" src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE?style=flat-square" />
@@ -26,7 +26,7 @@
 ## 功能
 
 - **批量导入**：每批 1–200 枚 Key，支持 `名称 | Key` 命名；重复自动跳过，列表只显示脱敏 Key
-- **余额查询**：通过官方余额接口读取每枚 Key 的 CNY 余额，金额用 BigInt 十进制精确计算；页面顶部汇总号池可用余额与累计消耗
+- **余额查询**：通过官方余额接口读取每枚 Key 的余额，支持 USD 等多币种并按汇率统一换算为人民币，金额用 BigInt 十进制精确计算；页面顶部汇总号池可用余额与累计消耗
 - **优先级管理**：设为当前、上移 / 下移、停用 / 启用、删除（同时清理该 Key 的专属凭据）
 - **自动切换**：模型请求明确返回 HTTP `402`（额度不足）时，按优先级换用下一枚可用 Key；其余错误原样交回官方处理
 - **官方对齐**：正常请求复用官方提供方的实时配置、模型目录与传输实现，不维护第二套参数
@@ -34,7 +34,7 @@
 
 ## 安装
 
-1. 从 [Releases](https://github.com/Xpropel/dsh-keys-manager/releases) 下载 `dsh-deepseek-key-pool-0.6.2.tgz`。
+1. 从 [Releases](https://github.com/Xpropel/dsh-keys-manager/releases) 下载 `dsh-deepseek-key-pool-0.6.3.tgz`。
 2. 在 DeepSeek Harness 桌面端打开 **插件 → 添加插件 → 安装第三方插件**，填写安装包的绝对路径，完成安装并启用插件。
 3. 在左侧栏打开 **API Key 池**。
 

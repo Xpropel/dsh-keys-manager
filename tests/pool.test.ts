@@ -350,13 +350,99 @@ test('rejects corrupt metadata and invalid settings without echoing contents', a
 
 test('balance parser rejects malformed amounts and does not infer availability', () => {
   assert.deepEqual(parseBalance({ is_available: false, balance_infos: [{ currency: 'CNY', total_balance: '0.001' }] }),
-    { available: false, balanceCny: '0.001', statisticsObservation: { balanceCny: '0.001', source: 'api' } });
+    { available: false, entries: [{ currency: 'CNY', amount: '0.001' }] });
+  assert.deepEqual(parseBalance({ is_available: true, balance_infos: [
+    { currency: 'USD', total_balance: '10.00' }, { currency: 'CNY', total_balance: '5.00' }] }),
+    { available: true, entries: [{ currency: 'USD', amount: '10.00' }, { currency: 'CNY', amount: '5.00' }] });
   for (const input of [null, {}, { is_available: 'true', balance_infos: [] },
     { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: 1.5 }] },
     { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '1e+3' }] },
-    { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '1' }, { currency: 'CNY', total_balance: '2' }] }]) {
+    { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '1' }, { currency: 'CNY', total_balance: '2' }] },
+    { is_available: true, balance_infos: [{ currency: 'US', total_balance: '1' }] },
+    { is_available: true, balance_infos: [{ currency: 'USD', total_balance: '1' }, { currency: 'usd', total_balance: '2' }] }]) {
     assert.throws(() => parseBalance(input));
   }
+});
+
+const foreignBalance = (infos: Array<{ currency: string; total_balance: string }>, available = true) =>
+  new Response(JSON.stringify({ is_available: available, balance_infos: infos }), { status: 200 });
+
+test('a USD-only key refreshes into a converted CNY total and feeds statistics', async (t) => {
+  let usd = '10.00';
+  const { pool, saved } = fixture({
+    fetch: async () => foreignBalance([{ currency: 'USD', total_balance: usd }]),
+    rateProvider: async (currency) => currency === 'USD' ? '7.2000' : null,
+  });
+  t.after(() => pool.stop());
+  const { addedIds: [id] } = await pool.importKeys([{ key: keyA }]);
+  await pool.refresh(id);
+  let entry = pool.snapshot().keys[0]!;
+  assert.equal(entry.balanceCny, '72.0000');
+  assert.deepEqual(entry.balances, [{ currency: 'USD', amount: '10.00' }]);
+  assert.equal(entry.statistics.initialBalanceCny, '72.0000');
+  assert.equal(saved()!.fxRates?.USD?.rateCny, '7.2000');
+  usd = '9.00';
+  await pool.refresh(id);
+  entry = pool.snapshot().keys[0]!;
+  assert.equal(entry.balanceCny, '64.8000');
+  assert.equal(entry.statistics.totalConsumedCny, '7.2000');
+});
+
+test('mixed CNY and foreign balances sum after conversion', async (t) => {
+  const { pool } = fixture({
+    fetch: async () => foreignBalance([
+      { currency: 'CNY', total_balance: '5.00' }, { currency: 'USD', total_balance: '10.00' }]),
+    rateProvider: async () => '7.2000',
+  });
+  t.after(() => pool.stop());
+  const { addedIds: [id] } = await pool.importKeys([{ key: keyA }]);
+  await pool.refresh(id);
+  assert.equal(pool.snapshot().keys[0]!.balanceCny, '77.0000');
+});
+
+test('a missing rate keeps the previous total, records native balances and explains itself', async (t) => {
+  let rate: string | null = null;
+  const { pool } = fixture({
+    fetch: async () => foreignBalance([{ currency: 'USD', total_balance: '10.00' }]),
+    rateProvider: async () => rate,
+  });
+  t.after(() => pool.stop());
+  const { addedIds: [id] } = await pool.importKeys([{ key: keyA }]);
+  await pool.refresh(id);
+  let entry = pool.snapshot().keys[0]!;
+  assert.equal(entry.balanceCny, null);
+  assert.deepEqual(entry.balances, [{ currency: 'USD', amount: '10.00' }]);
+  assert.match(entry.lastError ?? '', /汇率/);
+  assert.equal(entry.statistics.initialBalanceCny, null);
+  rate = '7.2000';
+  await pool.refresh(id);
+  entry = pool.snapshot().keys[0]!;
+  assert.equal(entry.balanceCny, '72.0000');
+  assert.equal(entry.lastError, null);
+});
+
+test('stored native balances and cached rates survive a reload', async (t) => {
+  const stored: PoolMetadata = {
+    version: 2, activeId: null, settings: { autoSwitch: true, refreshIntervalSeconds: 0 },
+    fxRates: { USD: { rateCny: '7.0000', fetchedAt: 1234567890 } },
+    keys: [{
+      id: 'stored-key', credentialRef: 'DSH_KEY_POOL_STORED', label: 'Stored', maskedKey: 'tes••••aaaa',
+      enabled: true, status: 'ready', balanceCny: '70.0000', balances: [{ currency: 'USD', amount: '10.00' }],
+      balanceObservationSource: 'api', balanceObservedAt: 1234567890, lastCheckedAt: 1234567890, lastError: null,
+      statistics: { initialBalanceCny: '70.0000', lastObservedCny: '70.0000', totalConsumedCny: '0', totalAddedCny: '0', startedAt: 1234567890, updatedAt: 1234567890, lastObservationSource: 'api' },
+    }],
+  };
+  const { pool, secrets } = fixture({
+    metadata: { async load() { return structuredClone(stored); }, async save() {} },
+    fetch: async () => foreignBalance([{ currency: 'USD', total_balance: '11.00' }]),
+    rateProvider: async () => null,
+  });
+  t.after(() => pool.stop());
+  secrets.set('DSH_KEY_POOL_STORED', keyA);
+  await pool.init();
+  assert.deepEqual(pool.snapshot().keys[0]!.balances, [{ currency: 'USD', amount: '10.00' }]);
+  await pool.refresh('stored-key');
+  assert.equal(pool.snapshot().keys[0]!.balanceCny, '77.0000');
 });
 
 test('statistics establish a first-observation baseline and accumulate decreases and increases independently', async t => {

@@ -49,6 +49,13 @@ export function parseSnapshot(value: unknown): PoolSnapshot {
         id: text(key.id), label: text(key.label), maskedKey: text(key.maskedKey), enabled: boolean(key.enabled),
         status: status as KeyStatus,
         balanceCny: key.balanceCny === null ? null : money(key.balanceCny),
+        ...(key.balances === undefined ? {} : {
+          balances: (Array.isArray(key.balances) ? key.balances : (() => { throw new Error('INVALID_POOL_RESPONSE') })())
+            .map(item => {
+              const balance = record(item)
+              return { currency: text(balance.currency), amount: money(balance.amount) }
+            }),
+        }),
         balanceObservationSource: observationSource(key.balanceObservationSource),
         balanceObservedAt: key.balanceObservedAt === null ? null : number(key.balanceObservedAt),
         lastCheckedAt: key.lastCheckedAt === null ? null : number(key.lastCheckedAt),
