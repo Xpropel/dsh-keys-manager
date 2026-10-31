@@ -181,7 +181,7 @@ export function KeyPoolPanel({ request, t = translateZh }: KeyPoolPanelProps) {
 
     <p className="dskp-note" style={{ marginBottom: 16 }}><Icon name="info"/><span>{t('routeHint')}</span></p>
 
-    {feedback && <div role={feedback.error ? 'alert' : 'status'} className={`dskp-feedback${feedback.error ? ' error' : ''}`}>{feedback.detail ?? t(feedback.key)}</div>}
+    <div className="dskp-feedback-slot">{feedback && <div role={feedback.error ? 'alert' : 'status'} className={`dskp-feedback${feedback.error ? ' error' : ''}`}>{feedback.detail ?? t(feedback.key)}</div>}</div>
     {loadFailed && <div role="alert" className="dskp-feedback error">{t('loadFailed')} <button className="dskp-button small" disabled={!!busy} onClick={() => { void mutate('snapshot') }}>{t('retry')}</button></div>}
 
     {importOpen && <form className="dskp-card dskp-import" onSubmit={event => { event.preventDefault(); void importKeys() }}>
