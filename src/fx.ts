@@ -11,7 +11,7 @@ export async function fetchCnyRate(
   signal?: AbortSignal,
 ): Promise<string | null> {
   try {
-    const response = await fetcher(`https://api.frankfurter.app/latest?from=${currency}&to=CNY`, {
+    const response = await fetcher(`https://api.frankfurter.dev/v1/latest?from=${currency}&to=CNY`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal,
