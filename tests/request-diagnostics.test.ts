@@ -196,3 +196,35 @@ test('a contended log cannot block record or keep plugin disposal waiting indefi
     assert.equal((await entries(file))[0]!.requestId, next.requestId)
   })
 })
+
+test('new pool failure codes are persisted while free-form and malformed codes stay UNKNOWN', async () => {
+  await fixture(async file => {
+    const store = createRequestDiagnostics(file)
+    const accepted = [
+      'KEY_POOL_CONFIG_UNAVAILABLE', 'INVALID_CREDENTIAL', 'KEY_POOL_ROTATION_LIMIT', 'KEY_POOL_KEY_INVALID', 'HTTP_402',
+    ]
+    const rejected = ['HTTP_99', 'HTTP_1000', 'HTTP_503x', 'http_402', 'HTTP_', 'KEY_POOL_NOT_A_CODE', 'AUTH_']
+    for (const code of accepted) store.record(input({ code }))
+    for (const code of rejected) store.record(input({ code }))
+    await store.flush()
+    const saved = await entries(file)
+    assert.deepEqual(saved.slice(0, accepted.length).map(row => row.code), accepted)
+    assert.deepEqual(saved.slice(accepted.length).map(row => row.code), rejected.map(() => 'UNKNOWN'))
+  })
+})
+
+test('existing files keep only allow-listed codes when they are rewritten', async () => {
+  await fixture(async file => {
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, JSON.stringify({ version: 1, entries: [{
+      ...input(), at: 1, code: 'HTTP_429', errorType: 'LlmError',
+    }, {
+      ...input(), at: 2, code: 'HTTP_4290', errorType: 'LlmError',
+    }] }))
+    const store = createRequestDiagnostics(file)
+    store.record(input({ code: 'KEY_POOL_ROTATION_LIMIT' }))
+    await store.flush()
+    const saved = await entries(file)
+    assert.deepEqual(saved.map(row => row.code), ['HTTP_429', 'UNKNOWN', 'KEY_POOL_ROTATION_LIMIT'])
+  })
+})

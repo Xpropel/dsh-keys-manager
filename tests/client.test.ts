@@ -3,13 +3,14 @@ import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/client'
-import { KeyPoolPanel, displayBalance, parseImport } from '../src/client/Panel.tsx'
+import { KeyPoolPanel, displayBalance, importBatchProblem, parseImport } from '../src/client/Panel.tsx'
 import { createClientRequest, parseSnapshot, PoolRequestError } from '../src/client/request.ts'
 import { ActiveKeySummary, BalanceValue, ConsumptionValue, StatisticsDetails, PoolBalanceCard, PoolConsumptionCard } from '../src/client/Statistics.tsx'
-import { timeLabel } from '../src/client/format.ts'
+import { clockLabel, dateLabel, timeLabel } from '../src/client/format.ts'
 import { translateZh } from '../src/client/locales.ts'
-import { keyListScrollTop, keyListViewportHeight, keyListWindow } from '../src/client/keyListPosition.ts'
+import { DEFAULT_PAGE_SIZE, PAGE_SIZES, clampPage, filterKeys, keyDisplayName, keyPage, moveToTopIds, pageCountOf, pageOfKey } from '../src/client/keyListPosition.ts'
 import type { PoolSnapshot } from '../src/types.ts'
+import type { KeyView } from '../src/client/types.ts'
 
 function snapshot(): PoolSnapshot {
   return {
@@ -28,6 +29,17 @@ function snapshot(): PoolSnapshot {
     }],
     events: [{ id: 'event-1', at: 1_792_672_000_000, kind: 'switch', message: '已选择工作 Key。' }],
   }
+}
+
+function manyKeys(count: number): KeyView[] {
+  const base = snapshot().keys[0]!
+  return Array.from({ length: count }, (_, index) => ({
+    ...base,
+    id: `key-${index + 1}`,
+    label: index % 3 === 0 ? '' : `账户 ${index + 1}`,
+    maskedKey: `…${String(index + 1).padStart(4, '0')}`,
+    status: index % 5 === 0 ? 'unknown' as const : 'ready' as const,
+  }))
 }
 
 // Import-parser fixtures need the sk- shape at runtime; build them dynamically so no key literal sits in the source.
@@ -69,6 +81,15 @@ test('the paste parser handles a 200-key batch without truncating or reordering 
   assert.equal(result.length, 200)
   assert.deepEqual(result[0], { label: 'Key 1', key: fakeKey('synthetic-0') })
   assert.deepEqual(result[199], { label: 'Key 200', key: fakeKey('synthetic-199') })
+  assert.equal(importBatchProblem(result), null)
+})
+
+test('the 1-200 batch limit is enforced before any request leaves the browser', () => {
+  const batch = (size: number) => Array.from({ length: size }, (_, index) => ({ key: fakeKey(`synthetic-${index}`) }))
+  assert.equal(importBatchProblem([]), 'empty')
+  assert.equal(importBatchProblem(batch(1)), null)
+  assert.equal(importBatchProblem(batch(200)), null)
+  assert.equal(importBatchProblem(batch(201)), 'limit')
 })
 
 test('displayed CNY balances preserve long integers, tiny fractions, and trailing zeroes', () => {
@@ -95,6 +116,28 @@ test('snapshot parsing retains the public state and strips unknown secret-bearin
   assert.equal(JSON.stringify(parsed).includes(secret), false)
   assert.equal(JSON.stringify(parsed).includes('credentialRef'), false)
   assert.equal(parsed.keys[0]!.balanceCny, '12345678901234567890.000100')
+  assert.equal(parsed.importSummary, undefined)
+})
+
+test('import replies expose the optional added/duplicate counters', () => {
+  const parsed = parseSnapshot({ ...snapshot(), importSummary: { added: 3, duplicates: 2 } })
+  assert.deepEqual(parsed.importSummary, { added: 3, duplicates: 2 })
+  assert.equal(JSON.stringify(parsed).includes('secret'), false)
+  assert.equal(translateZh('importSummary', { added: 3, duplicates: 2 }), '已导入 3 枚，跳过重复 2 枚。')
+})
+
+test('malformed import counters fail the reply instead of rendering NaN', () => {
+  for (const importSummary of [
+    null,
+    { added: 3 },
+    { added: '3', duplicates: 2 },
+    { added: 3, duplicates: -1 },
+    { added: 1.5, duplicates: 0 },
+    { added: Number.NaN, duplicates: 0 },
+    [],
+  ]) {
+    assert.throws(() => parseSnapshot({ ...snapshot(), importSummary }), /^Error: INVALID_POOL_RESPONSE$/)
+  }
 })
 
 test('snapshot parsing keeps an event key label for the history table', () => {
@@ -174,6 +217,15 @@ test('the panel first renders a loading state without inventing balances or maki
   assert.match(html, /正在读取 Key 池/)
   assert.equal(html.includes('12345678901234567890.000100'), false)
   assert.equal(html.includes('key…1234'), false)
+})
+
+test('the page owns the single h1, so the embedded panel hides its own section title', () => {
+  const html = renderToStaticMarkup(createElement(KeyPoolPanel, {
+    request: async () => snapshot(), showTitle: false,
+  }))
+  assert.equal(html.includes('<h1'), false)
+  assert.match(html, /<h2[^>]*class="dskp-visually-hidden"[^>]*>DeepSeek Key 池<\/h2>/)
+  assert.equal(html.includes('class="dskp-heading"'), false)
 })
 
 test('current-key summary displays remaining credit and exact cumulative consumption', () => {
@@ -262,6 +314,18 @@ test('the pool card shows a subtotal with coverage when an enabled key has no co
   assert.match(html, /已知余额小计，尚非完整总额/)
   assert.match(html, /1 枚启用 Key 的余额未确认/)
   assert.match(html, /最近查询快照/)
+  assert.match(html, /仅合计已启用、已确认可用的人民币余额/)
+})
+
+test('the pool card explains excluded keys so a partial total is not mistaken for a bug', () => {
+  const ready = { ...snapshot().keys[0]!, balanceCny: '11.9000' }
+  const exhausted = { ...ready, id: 'spent', status: 'exhausted' as const, balanceCny: '0.0000' }
+  const invalid = { ...ready, id: 'bad', status: 'invalid' as const, balanceCny: null }
+  const disabled = { ...ready, id: 'off', enabled: false, status: 'ready' as const, balanceCny: '2.0000' }
+  const html = renderToStaticMarkup(createElement(PoolBalanceCard, { keys: [ready, exhausted, invalid, disabled], t: translateZh }))
+  assert.match(html, /其余 2 枚已确认不可用，不计入总额/)
+  assert.match(html, /另有 1 枚已停用，不计入总额/)
+  assert.match(html, /已计入 1 \/ 3 枚启用 Key/)
 })
 
 test('the pool card distinguishes entirely unknown balances from a confirmed empty pool', () => {
@@ -279,7 +343,7 @@ test('the pool card distinguishes entirely unknown balances from a confirmed emp
   assert.match(confirmed, /0\.0000/)
 })
 
-test('the pool consumption card reveals historical usage outside the current key and shows coverage', () => {
+test('the pool consumption card reveals historical usage outside the current key and shows its measurement rule', () => {
   const current = snapshot().keys[0]!
   current.statistics.totalConsumedCny = '0'
   const previous = { ...current, id: 'spent', enabled: false, status: 'exhausted' as const, statistics: { ...current.statistics, totalConsumedCny: '8.3750' } }
@@ -292,8 +356,9 @@ test('the pool consumption card reveals historical usage outside the current key
   assert.match(html, /8\.3750/)
   assert.match(html, /统计覆盖 2 \/ 3 枚 Key/)
   assert.match(html, /1 枚尚未开始统计/)
-  assert.doesNotMatch(html, /包含停用、耗尽 Key/)
-  assert.doesNotMatch(html, /非精确账单/)
+  assert.match(html, /包含停用、耗尽 Key/)
+  assert.match(html, /非精确账单/)
+  assert.match(html, /不按账户去重/)
 })
 
 test('the pool consumption card distinguishes no baseline from a measured zero', () => {
@@ -313,39 +378,79 @@ test('the pool consumption card distinguishes no baseline from a measured zero',
   assert.match(zero, /统计覆盖 1 \/ 1 枚 Key/)
 })
 
-test('the key list window keeps priority neighbors around the active key without reordering', () => {
-  const ids = Array.from({ length: 248 }, (_, index) => `key-${index + 1}`)
-  const original = [...ids]
-  const window = keyListWindow(ids, 'key-137')
-  assert.deepEqual(ids.slice(window.start, window.end), ['key-136', 'key-137', 'key-138', 'key-139'])
-  assert.equal(window.active, 136)
-  assert.deepEqual(ids, original)
+test('search filters by label, masked key, and the status copy the user reads', () => {
+  const keys = manyKeys(30)
+  keys[0]!.label = 'Work Account'
+  keys[0]!.maskedKey = 'sk-…ZZZ9'
+  const label = filterKeys(keys, 'work', entry => translateZh(entry.enabled ? entry.status : 'disabled'))
+  assert.deepEqual(label.map(entry => entry.id), ['key-1'])
+  const masked = filterKeys(keys, 'zzz9', () => '')
+  assert.deepEqual(masked.map(entry => entry.id), ['key-1'])
+  const status = filterKeys(keys, '待查询', entry => translateZh(entry.enabled ? entry.status : 'disabled'))
+  assert.ok(status.length > 0)
+  assert.ok(status.every(entry => entry.status === 'unknown'))
+  assert.equal(filterKeys(keys, '   ', () => '').length, 30)
+  assert.equal(filterKeys(keys, 'no-such-label', () => '').length, 0)
+  assert.notEqual(filterKeys(keys, '   ', () => ''), keys)
 })
 
-test('first and tail keys retain a second-row position when a previous key exists', () => {
-  const ids = Array.from({ length: 248 }, (_, index) => `key-${index + 1}`)
-  assert.deepEqual(keyListWindow(ids, 'key-1'), { start: 0, end: 4, active: 0 })
-  assert.deepEqual(keyListWindow(ids, 'key-2'), { start: 0, end: 4, active: 1 })
-  assert.deepEqual(keyListWindow(ids, 'key-247'), { start: 245, end: 248, active: 246 })
-  assert.deepEqual(keyListWindow(ids, 'key-248'), { start: 246, end: 248, active: 247 })
-  assert.deepEqual(keyListWindow(['one'], 'one'), { start: 0, end: 1, active: 0 })
-  assert.deepEqual(keyListWindow([], null), { start: 0, end: 0, active: -1 })
-  assert.deepEqual(keyListWindow(ids, 'removed-key'), { start: 0, end: 4, active: -1 })
+test('pagination keeps the DOM row count at the page size for a 249-key pool', () => {
+  const keys = manyKeys(249)
+  const first = keyPage(keys, 0, DEFAULT_PAGE_SIZE)
+  assert.equal(DEFAULT_PAGE_SIZE, 20)
+  assert.deepEqual(PAGE_SIZES, [20, 50, 100])
+  assert.equal(first.items.length, 20)
+  assert.equal(pageCountOf(249, 20), 13)
+  const last = keyPage(keys, 12, 20)
+  assert.equal(last.page, 12)
+  assert.equal(last.items.length, 9)
+  assert.equal(last.items[0]!.id, 'key-241')
+  assert.equal(last.items.at(-1)!.id, 'key-249')
+  const hundred = keyPage(keys, 2, 100)
+  assert.equal(hundred.items.length, 49)
+  assert.equal(hundred.pageCount, 3)
+  // A stale index (e.g. after filtering or removal) clamps into range instead of crashing.
+  assert.equal(keyPage(keys, 99, 20).page, 12)
+  assert.equal(clampPage(99, 249, 20), 12)
+  assert.equal(clampPage(-2, 249, 20), 0)
+  const empty = keyPage([], 5, 20)
+  assert.deepEqual({ page: empty.page, pageCount: empty.pageCount, items: empty.items }, { page: 0, pageCount: 1, items: [] })
 })
 
-test('a tall-error window cannot expose five short rows, and tail windows need no fake rows', () => {
-  assert.equal(keyListViewportHeight([160, 160, 160, 160], [80, 160, 160, 160, 160], 36), 356)
-  assert.equal(keyListViewportHeight([80, 80], [80, 160, 80], 36), 196)
-  assert.equal(keyListViewportHeight([180, 180, 180, 180], [180, 180, 180, 180], 0), 720)
-  assert.equal(keyListViewportHeight([], [], 36), 0)
+test('locating the current key picks the page that holds it', () => {
+  const keys = manyKeys(249)
+  assert.equal(pageOfKey(keys, 'key-1', 20), 0)
+  assert.equal(pageOfKey(keys, 'key-20', 20), 0)
+  assert.equal(pageOfKey(keys, 'key-21', 20), 1)
+  assert.equal(pageOfKey(keys, 'key-249', 50), 4)
+  assert.equal(pageOfKey(keys, null, 20), 0)
+  assert.equal(pageOfKey(keys, 'removed', 20), 0)
 })
 
-test('locating the active key keeps it visible when the previous row has expanded details', () => {
-  const normal = { previousTop: 100, activeTop: 180, previousCollapsedHeight: 80, activeCollapsedHeight: 80, headerHeight: 36, viewportHeight: 356 }
-  assert.equal(keyListScrollTop(normal), 64)
-  const expanded = { ...normal, activeTop: 700 }
-  const top = keyListScrollTop(expanded)
-  assert.equal(top, 584)
-  assert.equal(expanded.activeTop - top - expanded.headerHeight, 80)
-  assert.equal(keyListScrollTop({ ...normal, previousTop: 36, activeTop: 36 }), 0)
+test('pinning a key rewrites the priority order without disturbing the others', () => {
+  const ids = ['a', 'b', 'c', 'd']
+  assert.deepEqual(moveToTopIds(ids, 'c'), ['c', 'a', 'b', 'd'])
+  assert.deepEqual(moveToTopIds(ids, 'd'), ['d', 'a', 'b', 'c'])
+  assert.deepEqual(ids, ['a', 'b', 'c', 'd'])
+  assert.equal(moveToTopIds(ids, 'a'), null)
+  assert.equal(moveToTopIds(ids, 'missing'), null)
+  const pinned = moveToTopIds(Array.from({ length: 249 }, (_, index) => `key-${index + 1}`), 'key-249')!
+  assert.equal(pinned.length, 249)
+  assert.equal(pinned[0], 'key-249')
+  assert.equal(new Set(pinned).size, 249)
+})
+
+test('timestamps include the year and follow the caller locale', () => {
+  const value = Date.UTC(2024, 0, 2, 3, 4, 5)
+  assert.match(timeLabel(value, 'zh-CN'), /2024/)
+  assert.match(timeLabel(value), /2024/)
+  assert.match(dateLabel(value, 'zh-CN'), /2024/)
+  assert.match(clockLabel(value, 'zh-CN'), /\d{2}:\d{2}:\d{2}/)
+  assert.notEqual(timeLabel(value, 'zh-CN'), timeLabel(value, 'en-US'))
+})
+
+test('an unnamed key falls back to the shared unnamed copy in every action label', () => {
+  const entry = { ...snapshot().keys[0]!, label: '   ' }
+  assert.equal(keyDisplayName(entry, '未命名 Key'), '未命名 Key')
+  assert.equal(keyDisplayName({ ...entry, label: '工作' }, '未命名 Key'), '工作')
 })

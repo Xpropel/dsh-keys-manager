@@ -2,10 +2,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { PoolError, type KeyPool, type PoolErrorCode } from './pool.ts'
-import type { PoolSnapshot } from './types.ts'
+import type { ImportSummary, PoolSnapshot } from './types.ts'
 import type {} from '@deepseek-ai/dsh-llm'
 
 export const KEY_POOL_ENDPOINT = 'deepseekKeyPool/request'
+
+/** Only these actions can change the configured pool and therefore invalidate LLM adapters. */
+const CONFIG_ACTIONS = new Set(['importKeys', 'remove', 'setActive', 'setEnabled', 'reorder', 'updateSettings'])
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
@@ -38,6 +41,7 @@ function identifier(value: unknown): string {
 
 /** Dispatch a validated request without exposing storage or provider error details. */
 export async function dispatchPoolRequest(pool: KeyPool, action: unknown, payload: unknown): Promise<PoolSnapshot> {
+  let importSummary: ImportSummary | undefined
   switch (action) {
     case 'snapshot': {
       object(payload, [])
@@ -59,6 +63,8 @@ export async function dispatchPoolRequest(pool: KeyPool, action: unknown, payloa
         return { key: row.key, ...(row.label === undefined ? {} : { label: row.label as string }) }
       })
       const imported = await pool.importKeys(keys)
+      // Response-only counts; the UI can distinguish inserted keys from skipped duplicates.
+      importSummary = { added: imported.addedIds.length, duplicates: imported.duplicateCount }
       // Establish only new keys' baselines promptly; importing stays responsive.
       void pool.scheduleRefresh(imported.addedIds).catch(() => undefined)
       break
@@ -107,7 +113,7 @@ export async function dispatchPoolRequest(pool: KeyPool, action: unknown, payloa
     default:
       throw new BridgeInputError('不支持此操作，请刷新插件页面。')
   }
-  return pool.snapshot()
+  return importSummary ? { ...pool.snapshot(), importSummary } : pool.snapshot()
 }
 
 /** Service exported through Typert's documented source-marker dispatch. */
@@ -136,8 +142,11 @@ export class KeyPoolRemote extends TypertRemoteService {
       // Never echo a fetch response, credential-store value, or filesystem error.
       throw new RemoteError('key-pool/internal', '操作未完成，请检查 Key 和插件状态后重试。', { reason: 'INTERNAL' })
     } finally {
-      // A removal can commit its metadata before credential cleanup reports a failure.
-      if (action !== 'snapshot') this.ctx.emit('llm/adapters-updated')
+      // Polling must stay quiet: only configuration changes invalidate adapter discovery.
+      // importKeys counts: new keys change the adapters' available-credential set.
+      // A removal can commit its metadata before credential cleanup reports a failure,
+      // so emission is keyed on the action, not on success.
+      if (typeof action === 'string' && CONFIG_ACTIONS.has(action)) this.ctx.emit('llm/adapters-updated')
     }
   }
 }

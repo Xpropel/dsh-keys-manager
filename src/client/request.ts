@@ -1,6 +1,6 @@
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import type { KeyStatus, PoolEvent, PoolSnapshot } from '../types.ts'
-import type { PoolRequest } from './types.ts'
+import type { KeyStatus, PoolEvent } from '../types.ts'
+import type { ImportSummary, PoolRequest, PoolView } from './types.ts'
 import { isDecimalString } from '../money.ts'
 
 export class PoolRequestError extends Error {
@@ -32,11 +32,22 @@ function money(value: unknown): string {
   return value
 }
 
+/** Counters are optional: older Hosts omit them, and a malformed pair fails the reply. */
+function importSummary(value: unknown): ImportSummary | undefined {
+  if (value === undefined) return undefined
+  const summary = record(value)
+  const added = number(summary.added)
+  const duplicates = number(summary.duplicates)
+  if (!Number.isInteger(added) || added < 0 || !Number.isInteger(duplicates) || duplicates < 0) throw new Error('INVALID_POOL_RESPONSE')
+  return { added, duplicates }
+}
+
 /** Reject a mismatched RPC version before rendering or caching its state. */
-export function parseSnapshot(value: unknown): PoolSnapshot {
+export function parseSnapshot(value: unknown): PoolView {
   const data = record(value)
   const settings = record(data.settings)
   if (!Array.isArray(data.keys) || !Array.isArray(data.events)) throw new Error('INVALID_POOL_RESPONSE')
+  const imported = importSummary(data.importSummary)
   return {
     activeId: data.activeId === null ? null : text(data.activeId),
     settings: { autoSwitch: boolean(settings.autoSwitch), refreshIntervalSeconds: number(settings.refreshIntervalSeconds) },
@@ -71,6 +82,7 @@ export function parseSnapshot(value: unknown): PoolSnapshot {
         },
       }
     }),
+    ...(imported === undefined ? {} : { importSummary: imported }),
     events: data.events.map(value => {
       const event = record(value)
       const kind = text(event.kind)

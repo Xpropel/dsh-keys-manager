@@ -7,7 +7,7 @@ import type {
   BalanceObservationSource, CurrencyBalance, FxRate, KeyStatus, KeyStatistics, PoolEvent, PoolMetadata, PoolSettings, PoolSnapshot, StoredPoolMetadata,
 } from './types.ts';
 
-export type PoolErrorCode = 'VALIDATION' | 'NOT_FOUND' | 'NO_AVAILABLE_KEY' |
+export type PoolErrorCode = 'VALIDATION' | 'INVALID_KEY' | 'NOT_FOUND' | 'NO_AVAILABLE_KEY' |
   'ACTIVE_KEY_UNAVAILABLE' | 'CREDENTIAL_NOT_FOUND' | 'POOL_STOPPED' | 'STORAGE_ERROR';
 
 export class PoolError extends Error {
@@ -37,6 +37,22 @@ interface RefreshOptions {
   signal?: AbortSignal;
 }
 
+/** One balance-check result that has not been applied to the pool state yet. */
+interface RefreshUpdate {
+  status: KeyStatus;
+  lastError: string | null;
+  balanceCny?: string | null;
+  balanceObservationSource?: BalanceObservationSource | null;
+  balances?: CurrencyBalance[];
+}
+
+interface RefreshOutcome {
+  task: RefreshTask;
+  update: RefreshUpdate;
+  observation: BalanceObservation | null;
+  checkedAt: number;
+}
+
 interface ScheduledRefresh {
   timer?: ReturnType<typeof setTimeout>;
   busy: boolean;
@@ -56,6 +72,12 @@ function withSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 }
 
 const defaults: PoolSettings = { autoSwitch: true, refreshIntervalSeconds: 300 };
+/** Fallback official origin when no provider connection has registered its base URL. */
+const DEFAULT_BALANCE_BASE = 'https://api.deepseek.com';
+const BALANCE_PATH = '/user/balance';
+const MAX_KEY_LENGTH = 512;
+/** Keys travel in an HTTP header, so only printable ASCII without whitespace is acceptable. */
+const KEY_CHARSET = /^[\x21-\x7E]+$/;
 /** Cached exchange rates are refreshed at most twice a day; stale rates remain usable offline. */
 const FX_MAX_AGE_MS = 12 * 3600 * 1000;
 const emptyMetadata = (): PoolMetadata => ({ version: 2, keys: [], activeId: null, settings: { ...defaults } });
@@ -219,6 +241,8 @@ export class KeyPool {
   private refreshRunning = 0;
   private refreshWaiters: Array<() => void> = [];
   private readonly fxRates = new Map<string, FxRate>();
+  /** The provider registers the official connection's base URL so balance checks follow it. */
+  private balanceBaseResolver: () => string | undefined = () => undefined;
 
   constructor(private readonly options: KeyPoolOptions, timing: Partial<KeyPoolRefreshTiming> = {}) {
     this.fetcher = options.fetch ?? globalThis.fetch;
@@ -266,6 +290,16 @@ export class KeyPool {
     };
   }
 
+  /**
+   * Point balance checks at the same origin as the official connection. The resolver
+   * is re-evaluated per check; a missing, throwing, or unusable value falls back to
+   * the public official origin instead of failing the refresh.
+   */
+  useBalanceBaseURL(resolve: () => string | undefined): void {
+    if (typeof resolve !== 'function') throw new PoolError('VALIDATION', '余额查询地址解析器必须是函数。');
+    this.balanceBaseResolver = resolve;
+  }
+
   async importKeys(inputs: ImportKeyInput[]): Promise<ImportKeysResult> {
     await this.init();
     if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 200) {
@@ -274,7 +308,9 @@ export class KeyPool {
     const normalized = inputs.map((input) => {
       if (!input || typeof input.key !== 'string') throw new PoolError('VALIDATION', 'Key 必须是字符串。');
       const key = input.key.trim();
-      if (!key || /\s/u.test(key) || key.length > 4096) throw new PoolError('VALIDATION', 'Key 不能为空或包含空格、换行。');
+      if (key.length > MAX_KEY_LENGTH || !KEY_CHARSET.test(key)) {
+        throw new PoolError('INVALID_KEY', 'Key 只能包含可打印 ASCII 字符（不含空白），长度不超过 512。');
+      }
       if (input.label !== undefined && typeof input.label !== 'string') throw new PoolError('VALIDATION', '名称必须是字符串。');
       const label = input.label?.trim();
       if (label && (label.length > 100 || /[\r\n]/.test(label))) throw new PoolError('VALIDATION', '名称限 100 个字符且不能换行。');
@@ -440,23 +476,40 @@ export class KeyPool {
     });
   }
 
+  /**
+   * Only HTTP 402 is actionable for pool routing; every other upstream failure is
+   * request-scoped and must not disable a key the user may keep using.
+   */
   async reportFailure(id: string, status: number): Promise<void> {
     await this.init();
-    if (status !== 401 && status !== 402) return;
+    if (status !== 402) return;
     return this.serial(async () => {
       const current = this.state.keys.find((entry) => entry.id === id);
       if (!current) return; // An in-flight request may finish after the user removes its key.
       const next = clone(this.state);
       const entry = next.keys.find((candidate) => candidate.id === id)!;
-      entry.status = status === 401 ? 'invalid' : 'exhausted';
-      entry.lastError = status === 401 ? '认证失败（401）。' : '账户余额不足（402）。';
+      entry.status = 'exhausted';
+      entry.lastError = '账户余额不足（402）。';
       this.selectFallback(next);
       await this.commit(next);
       this.bump(id);
     });
   }
 
-  markExhausted(id: string): Promise<void> { return this.reportFailure(id, 402); }
+  /** The provider reports an upstream credential rejection (INVALID_CREDENTIAL) here. */
+  async reportInvalidCredential(id: string): Promise<void> {
+    await this.init();
+    return this.serial(async () => {
+      if (!this.state.keys.some((entry) => entry.id === id)) return;
+      const next = clone(this.state);
+      const entry = next.keys.find((candidate) => candidate.id === id)!;
+      entry.status = 'invalid';
+      entry.lastError = '认证失败（401）。';
+      this.selectFallback(next);
+      await this.commit(next);
+      this.bump(id);
+    });
+  }
 
   async refresh(id?: string): Promise<void> {
     await this.init();
@@ -494,17 +547,29 @@ export class KeyPool {
         id: entry.id, credentialRef: entry.credentialRef, generation: this.bump(entry.id), started: false,
       }));
     });
-    await Promise.all(tasks.map(task => {
-      const running = this.withRefreshSlot(async () => {
+    if (tasks.length === 0) return;
+    // One batch commits once: a settled promise is published per key but only after
+    // the whole round has been observed and (if anything changed) persisted.
+    const tracked = tasks.map((task) => {
+      let settle!: () => void;
+      const settled = new Promise<void>((resolve) => { settle = resolve; });
+      this.refreshTasks.set(task.id, { task, promise: settled });
+      return { task, settled, settle };
+    });
+    try {
+      const outcomes: RefreshOutcome[] = [];
+      await Promise.all(tracked.map(({ task }) => this.withRefreshSlot(async () => {
         task.started = true;
-        await this.refreshOne(task, options);
-      }, options.priority);
-      const tracked = { task, promise: running };
-      this.refreshTasks.set(task.id, tracked);
-      return running.finally(() => {
-        if (this.refreshTasks.get(task.id) === tracked) this.refreshTasks.delete(task.id);
-      });
-    }));
+        const outcome = await this.probeOne(task, options);
+        if (outcome) outcomes.push(outcome);
+      }, options.priority)));
+      await this.commitRefreshOutcomes(outcomes, options);
+    } finally {
+      for (const { task, settled, settle } of tracked) {
+        if (this.refreshTasks.get(task.id)?.promise === settled) this.refreshTasks.delete(task.id);
+        settle();
+      }
+    }
   }
 
   stop(): void {
@@ -519,24 +584,34 @@ export class KeyPool {
     for (const controller of this.controllers) controller.abort();
   }
 
-  private async refreshOne(task: RefreshTask, options: RefreshOptions): Promise<void> {
-    if (this.stopped || options.signal?.aborted || this.generations.get(task.id) !== task.generation) return;
+  /** Balance endpoint follows the official connection origin, falling back to the public one. */
+  private balanceURL(): string {
+    const fallback = new URL(BALANCE_PATH, DEFAULT_BALANCE_BASE).toString();
+    let base: string | undefined;
+    try { base = this.balanceBaseResolver(); }
+    catch { return fallback; }
+    if (typeof base !== 'string' || base.trim() === '') return fallback;
+    try {
+      const url = new URL(BALANCE_PATH, base);
+      return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : fallback;
+    } catch { return fallback; }
+  }
+
+  /** Probe one key without touching state; the round's owner applies and persists the outcomes. */
+  private async probeOne(task: RefreshTask, options: RefreshOptions): Promise<RefreshOutcome | undefined> {
+    if (this.stopped || options.signal?.aborted || this.generations.get(task.id) !== task.generation) return undefined;
     this.refreshAttemptAt.set(task.id, performance.now());
     const controller = new AbortController();
     this.controllers.add(controller);
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    let update: {
-      status: KeyStatus; lastError: string | null; balanceCny?: string | null;
-      balanceObservationSource?: BalanceObservationSource | null;
-      balances?: CurrencyBalance[];
-    };
+    let update: RefreshUpdate | undefined;
     let observation: BalanceObservation | null = null;
     try {
       const key = await this.options.credentials.resolve(task.credentialRef);
       if (!key || /\s/u.test(key)) {
         update = { status: 'invalid', lastError: '本地凭据不存在，请重新导入。' };
       } else {
-        const response = await this.fetcher('https://api.deepseek.com/user/balance', {
+        const response = await this.fetcher(this.balanceURL(), {
           method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${key}` },
           signal: options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
         });
@@ -580,25 +655,49 @@ export class KeyPool {
       clearTimeout(timeout);
       this.controllers.delete(controller);
     }
-    if (this.stopped) return;
+    // Stopping discards every outcome; the caller's signal abort is still an observed
+    // failure worth persisting once, like the pre-batching per-key behavior.
+    if (this.stopped || !update) return undefined;
+    return { task, update, observation, checkedAt: this.now() };
+  }
+
+  private applyRefreshOutcome(next: PoolMetadata, outcome: RefreshOutcome, allowRecovery: boolean): void {
+    const entry = next.keys.find((candidate) => candidate.id === outcome.task.id)!;
+    let update = outcome.update;
+    // A failed check is not evidence that a previously rejected credential recovered.
+    if ((update.status === 'error' || !allowRecovery && update.status === 'ready') &&
+        (entry.status === 'exhausted' || entry.status === 'invalid')) {
+      update = { ...update, status: entry.status };
+      if (update.lastError === null) update.lastError = entry.lastError;
+    }
+    Object.assign(entry, update, { lastCheckedAt: outcome.checkedAt });
+    if (update.balanceObservationSource !== undefined) {
+      entry.balanceObservedAt = outcome.observation !== null ? outcome.checkedAt : null;
+    }
+    if (outcome.observation !== null) entry.statistics = observeStatistics(entry.statistics, outcome.observation, outcome.checkedAt);
+  }
+
+  /** Apply one whole round under a single serial slot and persist only real state changes. */
+  private async commitRefreshOutcomes(outcomes: readonly RefreshOutcome[], options: RefreshOptions): Promise<void> {
+    if (this.stopped || outcomes.length === 0) return;
     await this.serial(async () => {
-      if (this.generations.get(task.id) !== task.generation || !this.state.keys.some((entry) => entry.id === task.id)) return;
+      if (this.stopped) return;
       const next = clone(this.state);
-      const entry = next.keys.find((candidate) => candidate.id === task.id)!;
-      // A failed check is not evidence that a previously rejected credential recovered.
-      if ((update.status === 'error' || !options.allowRecovery && update.status === 'ready') &&
-          (entry.status === 'exhausted' || entry.status === 'invalid')) {
-        update = { ...update, status: entry.status };
-        if (update.lastError === null) update.lastError = entry.lastError;
+      let applied = 0;
+      for (const outcome of outcomes) {
+        // A status/removal change during the round invalidates that key's observation.
+        if (this.generations.get(outcome.task.id) !== outcome.task.generation) continue;
+        if (!next.keys.some((entry) => entry.id === outcome.task.id)) continue;
+        this.applyRefreshOutcome(next, outcome, options.allowRecovery);
+        applied++;
       }
-      const checkedAt = this.now();
-      Object.assign(entry, update, { lastCheckedAt: checkedAt });
-      if (update.balanceObservationSource !== undefined) entry.balanceObservedAt = observation !== null ? checkedAt : null;
-      if (observation !== null) entry.statistics = observeStatistics(entry.statistics, observation, checkedAt);
+      if (!applied) return;
       this.selectFallback(next);
       if (this.fxRates.size) {
         next.fxRates = Object.fromEntries([...this.fxRates].map(([currency, rate]) => [currency, { ...rate }]));
       }
+      // Timestamps make most rounds a real change; an identical round stays memory-only.
+      if (JSON.stringify(next) === JSON.stringify(this.state)) return;
       await this.commit(next);
     });
   }

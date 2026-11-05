@@ -35,6 +35,16 @@ class FileMetadataStore implements MetadataStore {
     }
   }
 
+  private get backupPath(): string { return `${this.filePath}.bak` }
+
+  /** A recovery copy is best-effort: failing to write it must never block a successful load. */
+  private async writeBackup(contents: string): Promise<void> {
+    try {
+      await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 })
+      await writeFileAtomic(this.backupPath, contents, { mode: 0o600, dirMode: 0o700 })
+    } catch { /* Recovery convenience only; the authoritative file is already intact. */ }
+  }
+
   async load(): Promise<StoredPoolMetadata | undefined> {
     this.loaded = false
     const contents = await this.read()
@@ -45,9 +55,13 @@ class FileMetadataStore implements MetadataStore {
     }
     let parsed: unknown
     try { parsed = JSON.parse(contents) }
-    catch { throw new Error('Key 池数据文件格式损坏；原文件已保留。') }
+    catch {
+      // Never overwrite the damaged file or a previously good backup with unparsable contents.
+      throw new Error(`Key 池数据文件格式损坏（${this.filePath}）；原文件已保留，可从备份 ${this.backupPath} 恢复：请先移走损坏文件再重新加载。`)
+    }
     this.revision = digest(contents)
     this.loaded = true
+    await this.writeBackup(contents)
     // The domain validates the complete schema before using or writing this value.
     return parsed as StoredPoolMetadata
   }

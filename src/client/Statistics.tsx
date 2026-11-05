@@ -16,22 +16,31 @@ function Money({ value, prominent = false }: { value: string | null; prominent?:
   return <div className={`dskp-amount${prominent ? ' dskp-metric-amount' : ''}`}>{value === null ? '—' : <><span className="dskp-currency-symbol">¥ </span>{displayBalance(value)}</>}</div>
 }
 
+interface Localized { locale?: string }
+
 /** Pool-wide balance is a transparent sum of confirmed usable query snapshots. */
-export function PoolBalanceCard({ keys, t }: { keys: readonly KeyView[]; t: Translate }) {
+export function PoolBalanceCard({ keys, t, locale }: { keys: readonly KeyView[]; t: Translate } & Localized) {
   const summary = summarizePoolBalance(keys)
   const displayedTotal = summary.includedCount === 0 && summary.totalCny === '0' ? '0.00' : summary.totalCny
+  // Enabled keys that are confirmed unusable are the "109 / 249" explanation:
+  // they are excluded on purpose, not silently dropped.
+  const unavailableCount = keys.filter(key => key.enabled && (key.status === 'invalid' || key.status === 'exhausted')).length
+  const disabledCount = keys.filter(key => !key.enabled).length
   return <section className="dskp-pool-summary" aria-label={t('poolBalanceTitle')}>
     <div className="dskp-pool-heading"><h3>{t('poolBalanceTitle')}</h3><span className="dskp-pool-currency">{t('currencyCny')}</span></div>
     <div className="dskp-pool-total-row"><Money value={displayedTotal} prominent/><span className="dskp-pool-coverage">{t('poolBalanceCoverage', { included: summary.includedCount, enabled: summary.enabledCount })}</span></div>
     {summary.missingCount > 0 && <div className="dskp-pool-incomplete"><strong>{t(summary.totalCny === null ? 'poolBalanceUnknown' : 'poolBalancePartial')}</strong><span>{t('poolBalanceMissing', { count: summary.missingCount })}</span></div>}
-    <p className="dskp-pool-snapshot">{summary.oldestObservedAt !== null ? t('poolBalanceOldest', { time: timeLabel(summary.oldestObservedAt) })
+    <p className="dskp-pool-snapshot">{summary.oldestObservedAt !== null ? t('poolBalanceOldest', { time: timeLabel(summary.oldestObservedAt, locale) })
       : summary.enabledCount === 0 ? t('poolBalanceNoEnabled')
         : summary.missingCount === 0 ? t('poolBalanceNoneAvailable') : null}</p>
+    {unavailableCount > 0 && <p className="dskp-pool-excluded">{t('poolBalanceUnavailable', { count: unavailableCount })}</p>}
+    {disabledCount > 0 && <p className="dskp-pool-excluded">{t('poolBalanceDisabled', { count: disabledCount })}</p>}
+    <p className="dskp-pool-rule">{t('poolBalanceRule')}</p>
   </section>
 }
 
 /** Historical consumption remains visible above the key list, even after the active key changes. */
-export function PoolConsumptionCard({ keys, t }: { keys: readonly KeyView[]; t: Translate }) {
+export function PoolConsumptionCard({ keys, t, locale }: { keys: readonly KeyView[]; t: Translate } & Localized) {
   const summary = summarizePoolConsumption(keys)
   const displayedTotal = summary.totalCny === '0' ? '0.00' : summary.totalCny
   return <section className="dskp-pool-summary dskp-pool-consumption" aria-label={t('poolConsumptionTitle')}>
@@ -40,24 +49,26 @@ export function PoolConsumptionCard({ keys, t }: { keys: readonly KeyView[]; t: 
     {summary.totalCny === null ? <div className="dskp-pool-incomplete"><strong>{t('poolConsumptionPending')}</strong></div>
       : summary.missingCount > 0 && <div className="dskp-pool-incomplete"><strong>{t('poolConsumptionPartial')}</strong></div>}
     {summary.missingCount > 0 && <p className="dskp-pool-missing">{t('poolConsumptionMissing', { count: summary.missingCount })}</p>}
-    {summary.trackedCount > 0 && <p className="dskp-pool-snapshot">{summary.oldestUpdatedAt === null ? t('poolConsumptionSnapshot') : t('poolConsumptionOldest', { time: timeLabel(summary.oldestUpdatedAt) })}</p>}
+    {summary.trackedCount > 0 && <p className="dskp-pool-snapshot">{summary.oldestUpdatedAt === null ? t('poolConsumptionSnapshot') : t('poolConsumptionOldest', { time: timeLabel(summary.oldestUpdatedAt, locale) })}</p>}
+    <p className="dskp-pool-rule">{t('poolConsumptionRule')}</p>
+    <p className="dskp-pool-method">{t('poolConsumptionMethod')}</p>
   </section>
 }
 
 /** Exact remaining amount plus the source-specific caption visible to the user. */
-export function BalanceValue({ entry, t, prominent = false }: { entry: KeyView; t: Translate; prominent?: boolean }) {
+export function BalanceValue({ entry, t, prominent = false, locale }: { entry: KeyView; t: Translate; prominent?: boolean } & Localized) {
   const balance = balancePresentation(entry)
   const updated = entry.balanceObservedAt
   return <>
     <Money value={balance.amount} prominent={prominent}/>
     {balance.derivedZero && <div className="dskp-balance-source">{t('unavailableZero')}</div>}
     {balance.amount === null ? <div className="dskp-time">{t('noCnyBalance')}</div>
-      : <div className="dskp-time">{updated === null ? t('savedBalance') : t('checkedAt', { time: timeLabel(updated) })}</div>}
+      : <div className="dskp-time">{updated === null ? t('savedBalance') : t('checkedAt', { time: timeLabel(updated, locale) })}</div>}
   </>
 }
 
 /** The starting observation and accumulated increases never pretend to be a past bill. */
-export function StatisticsDetails({ entry, t }: { entry: KeyView; t: Translate }) {
+export function StatisticsDetails({ entry, t, locale }: { entry: KeyView; t: Translate } & Localized) {
   const stats = entry.statistics
   const started = stats.startedAt !== null
   return <details className="dskp-statistics-details">
@@ -65,34 +76,34 @@ export function StatisticsDetails({ entry, t }: { entry: KeyView; t: Translate }
     {started ? <dl>
       <div><dt>{t('firstBalance')}</dt><dd>{stats.initialBalanceCny === null ? '—' : `¥ ${displayBalance(stats.initialBalanceCny)}`}</dd></div>
       <div><dt>{t('totalAdded')}</dt><dd>¥ {displayBalance(stats.totalAddedCny)}</dd></div>
-      <div><dt>{t('statisticsStartedAt')}</dt><dd>{timeLabel(stats.startedAt!)}</dd></div>
-      <div><dt>{t('statisticsUpdatedAt')}</dt><dd>{stats.updatedAt === null ? '—' : timeLabel(stats.updatedAt)}</dd></div>
+      <div><dt>{t('statisticsStartedAt')}</dt><dd>{timeLabel(stats.startedAt!, locale)}</dd></div>
+      <div><dt>{t('statisticsUpdatedAt')}</dt><dd>{stats.updatedAt === null ? '—' : timeLabel(stats.updatedAt, locale)}</dd></div>
     </dl> : <p>{t('initialQueryHint')}</p>}
   </details>
 }
 
 /** A pending first observation renders an em dash, not fabricated zero consumption. */
-export function ConsumptionValue({ entry, t, prominent = false, details = false }: { entry: KeyView; t: Translate; prominent?: boolean; details?: boolean }) {
+export function ConsumptionValue({ entry, t, prominent = false, details = false, locale }: { entry: KeyView; t: Translate; prominent?: boolean; details?: boolean } & Localized) {
   const stats = entry.statistics
   const started = stats.startedAt !== null
   return <>
     <Money value={started ? stats.totalConsumedCny : null} prominent={prominent}/>
-    <div className="dskp-time">{!started || stats.updatedAt === null ? t('statisticsPending') : t('statisticsCutoff', { time: timeLabel(stats.updatedAt) })}</div>
-    {details && <StatisticsDetails entry={entry} t={t}/>}
+    <div className="dskp-time">{!started || stats.updatedAt === null ? t('statisticsPending') : t('statisticsCutoff', { time: timeLabel(stats.updatedAt, locale) })}</div>
+    {details && <StatisticsDetails entry={entry} t={t} locale={locale}/>}
   </>
 }
 
 /** Prominent summary is scoped to the current key; it never sums the whole pool. */
-export function ActiveKeySummary({ entry, t }: { entry: KeyView | undefined; t: Translate }) {
+export function ActiveKeySummary({ entry, t, locale }: { entry: KeyView | undefined; t: Translate } & Localized) {
   return <div className="dskp-active-summary">
     <div className="dskp-active-heading">
       <div><span className="dskp-stat-label">{t('activeKey')}</span><div className="dskp-active-name">{entry?.label || t('none')}</div>{entry && <div className="dskp-key-id">{entry.maskedKey}</div>}</div>
-      {entry && <span className={`dskp-status ${entry.enabled ? entry.status : ''}`} title={entry.lastCheckedAt === null ? undefined : t('lastCheckAttempt', { time: timeLabel(entry.lastCheckedAt) })}>{t(entry.enabled ? entry.status : 'disabled')}</span>}
+      {entry && <span className={`dskp-status ${entry.enabled ? entry.status : ''}`} title={entry.lastCheckedAt === null ? undefined : t('lastCheckAttempt', { time: timeLabel(entry.lastCheckedAt, locale) })}>{t(entry.enabled ? entry.status : 'disabled')}</span>}
     </div>
     <div className="dskp-current-metrics">
-      <div className="dskp-current-metric"><div className="dskp-metric-label">{t('currentBalance')}<span>{t('currencyCny')}</span></div>{entry ? <BalanceValue entry={entry} t={t} prominent/> : <Money value={null} prominent/>}</div>
-      <div className="dskp-current-metric"><div className="dskp-metric-label">{t('consumed')}<span>{t('currencyCny')}</span></div>{entry ? <ConsumptionValue entry={entry} t={t} prominent/> : <Money value={null} prominent/>}</div>
+      <div className="dskp-current-metric"><div className="dskp-metric-label">{t('currentBalance')}<span>{t('currencyCny')}</span></div>{entry ? <BalanceValue entry={entry} t={t} locale={locale} prominent/> : <Money value={null} prominent/>}</div>
+      <div className="dskp-current-metric"><div className="dskp-metric-label">{t('consumed')}<span>{t('currencyCny')}</span></div>{entry ? <ConsumptionValue entry={entry} t={t} locale={locale} prominent/> : <Money value={null} prominent/>}</div>
     </div>
-    {entry ? <div className="dskp-active-detail"><StatisticsDetails entry={entry} t={t}/>{entry.lastError && <p className="dskp-active-error">{entry.lastError}</p>}</div> : <p className="dskp-active-empty">{t('noActiveHint')}</p>}
+    {entry ? <div className="dskp-active-detail"><StatisticsDetails entry={entry} t={t} locale={locale}/>{entry.lastError && <p className="dskp-active-error">{entry.lastError}</p>}</div> : <p className="dskp-active-empty">{t('noActiveHint')}</p>}
   </div>
 }

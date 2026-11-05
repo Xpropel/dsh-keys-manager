@@ -11,6 +11,9 @@ import type {} from '@deepseek-ai/dsh-app-boot'
 const OFFICIAL_PROVIDER = 'deepseek-official'
 const OFFICIAL_MODULE = '@deepseek-ai/dsh-llm-deepseek-api-key'
 const UNAVAILABLE = '官方 DeepSeek API 提供方的配置暂不可用，请检查该提供方是否已启用。'
+/** A user-disabled official provider is an explicit choice, not a configuration error. */
+const DISABLED_IDENTITY = 'sdk-defaults:official-disabled'
+const DISABLED_WARNING = '官方 DeepSeek API 提供方已被停用，Key 池将改用官方默认配置。'
 
 export interface OfficialConnectionSource {
   get(): OfficialApiKey.ResolvedDeepSeekOptions
@@ -62,6 +65,13 @@ export function createOfficialConnectionSource(
   let owner: Context | undefined
   let releaseOwner: (() => unknown) | undefined
   let releases: Array<() => unknown> = []
+  let warnedDisabled = false
+
+  /** Resolve the official schema defaults; the identity distinguishes the fallback cause. */
+  const defaults = (identity: string): Snapshot => ({
+    options: OfficialApiKey.resolveAdapterOptions(normalized({}), launchEnvironmentOf(ctx)),
+    identity,
+  })
 
   const read = (): Snapshot => {
     if (overrideOptions) return {
@@ -100,10 +110,20 @@ export function createOfficialConnectionSource(
 
     if (selected) {
       knownOfficialSource = true
+      // An explicitly disabled official provider has no live configuration to follow.
+      // Fall back to the validated schema defaults and explain the choice once; this
+      // is not a real configuration error, unlike an unready or missing provider.
+      if (selected.disabled) {
+        if (!warnedDisabled) {
+          warnedDisabled = true
+          console.warn('[deepseek-key-pool]', DISABLED_WARNING)
+        }
+        return defaults(DISABLED_IDENTITY)
+      }
       const fiber = selected.fiber
       // LOADING already owns a schema-validated Config; waiting for ACTIVE here can
       // miss the provider's registration event during the same startup turn.
-      if (selected.disabled || !fiber || (fiber.state !== 1 && fiber.state !== 2)) throw unavailable()
+      if (!fiber || (fiber.state !== 1 && fiber.state !== 2)) throw unavailable()
       // Cordis 4.1 keeps raw input in config. Read the same validated live
       // values its plugin received, including the volatile settings references.
       const liveConfig = 'effectiveConfig' in fiber ? fiber.effectiveConfig : fiber.config
@@ -133,10 +153,7 @@ export function createOfficialConnectionSource(
     // SDK-only consumers have no configured official instance to follow. A product
     // host with a configuration directory must not silently use unrelated defaults.
     if (knownOfficialSource || editor || loader || settings) throw unavailable()
-    return {
-      options: OfficialApiKey.resolveAdapterOptions(normalized({}), launchEnvironmentOf(ctx)),
-      identity: 'sdk-defaults',
-    }
+    return defaults('sdk-defaults')
   }
 
   const get = (): OfficialApiKey.ResolvedDeepSeekOptions => {

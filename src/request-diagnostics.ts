@@ -17,8 +17,12 @@ const FAILURE_CODES = new Set([
   'INVALID_REQUEST', 'CONTEXT_WINDOW_EXCEEDED', 'IMAGE_OFFLOAD_REQUIRED',
   'EMPTY_RESPONSE', 'STREAM_CLOSED', 'MALFORMED_RESPONSE',
   'KEY_POOL_REQUEST_ERROR', 'KEY_POOL_TLS_ERROR', 'KEY_POOL_ROTATE',
-  'KEY_POOL_STATE_ERROR', 'KEY_POOL_UNAVAILABLE', 'UNKNOWN',
+  'KEY_POOL_STATE_ERROR', 'KEY_POOL_UNAVAILABLE',
+  'KEY_POOL_CONFIG_UNAVAILABLE', 'INVALID_CREDENTIAL', 'KEY_POOL_ROTATION_LIMIT', 'KEY_POOL_KEY_INVALID',
+  'UNKNOWN',
 ])
+/** Retain only the bounded HTTP_<three digits> shape; every other free-form code stays UNKNOWN. */
+const HTTP_FAILURE_CODE = /^HTTP_[0-9]{3}$/
 const ERROR_TYPES = new Set([
   'Error', 'TypeError', 'RangeError', 'SyntaxError', 'DOMException',
   'AbortError', 'TimeoutError', 'LlmError', 'Unknown',
@@ -94,6 +98,12 @@ function allow(value: unknown, choices: Set<string>, fallback: string): string {
   return typeof value === 'string' && choices.has(value) ? value : fallback
 }
 
+/** Codes are an allow-list plus one bounded HTTP-shape exception; no arbitrary text reaches disk. */
+function failureCode(value: unknown): string {
+  if (typeof value !== 'string') return 'UNKNOWN'
+  return FAILURE_CODES.has(value) || HTTP_FAILURE_CODE.test(value) ? value : 'UNKNOWN'
+}
+
 /** Re-applied when reading disk: older or externally added fields cannot survive a rewrite. */
 function sanitize(input: unknown, at: number): SafeEntry {
   const model = own(input, 'model')
@@ -112,7 +122,7 @@ function sanitize(input: unknown, at: number): SafeEntry {
     ...(keyId === undefined ? {} : { keyId }),
     model: model === 'deepseek-flash' || model === 'deepseek-v4-pro' ? model : 'other',
     phase: phase === 'before-output' || phase === 'during-stream' ? phase : 'unknown',
-    code: allow(own(input, 'code'), FAILURE_CODES, 'UNKNOWN'),
+    code: failureCode(own(input, 'code')),
     errorType: allow(own(input, 'errorType'), ERROR_TYPES, 'Unknown'),
     ...(networkCode ? { networkCode } : {}),
     ...(typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599 ? { status } : {}),

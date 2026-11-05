@@ -122,3 +122,33 @@ test('partially committed removal publishes fresh availability and an actionable
     assert.equal(fixture.pool.snapshot().keys.length, 0)
   } finally { await fixture.close() }
 })
+
+test('imports return counts and only configuration changes publish adapter updates', async () => {
+  const fixture = await setup()
+  try {
+    let changes = 0
+    fixture.ctx.on('llm/adapters-updated', () => { changes++ })
+    const first = await fixture.call('importKeys', {
+      keys: [{ key: 'test-credential-bridge-summary-a' }, { key: 'test-credential-bridge-summary-b' }],
+    }) as { importSummary?: { added: number; duplicates: number }; keys: Array<{ id: string }> }
+    assert.deepEqual(first.importSummary, { added: 2, duplicates: 0 })
+    assert.equal(changes, 1)
+    const duplicate = await fixture.call('importKeys', { keys: [{ key: 'test-credential-bridge-summary-a' }] }) as {
+      importSummary?: { added: number; duplicates: number }
+    }
+    assert.deepEqual(duplicate.importSummary, { added: 0, duplicates: 1 })
+    assert.equal(changes, 2)
+    // Polling answers must stay silent and must not carry import-only fields.
+    const snapshot = await fixture.call('snapshot', {}) as { importSummary?: unknown; keys: Array<{ id: string }> }
+    assert.equal('importSummary' in snapshot, false)
+    assert.equal(changes, 2)
+    await fixture.call('refresh', {})
+    assert.equal(changes, 2)
+    await fixture.call('setEnabled', { id: snapshot.keys[0]!.id, enabled: false })
+    assert.equal(changes, 3)
+    await fixture.call('updateSettings', { refreshIntervalSeconds: 0 })
+    assert.equal(changes, 4)
+    await fixture.call('setActive', { id: snapshot.keys[1]!.id })
+    assert.equal(changes, 5)
+  } finally { await fixture.close() }
+})

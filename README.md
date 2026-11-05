@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/Xpropel/dsh-keys-manager/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
-  <img alt="Tests: 194 passing" src="https://img.shields.io/badge/tests-194%20passing-brightgreen?style=flat-square" />
+  <img alt="Tests: 237 passing" src="https://img.shields.io/badge/tests-237%20passing-brightgreen?style=flat-square" />
   <img alt="Node 22.19+" src="https://img.shields.io/badge/node-%3E%3D22.19-339933?style=flat-square" />
   <img alt="DeepSeek Harness plugin" src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE?style=flat-square" />
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/Xpropel/dsh-keys-manager?style=flat-square" /></a>
@@ -25,10 +25,11 @@
 
 ## 功能
 
-- **批量导入**：每批 1–200 枚 Key，支持 `名称 | Key` 命名；重复自动跳过，列表只显示脱敏 Key
-- **余额查询**：通过官方余额接口读取每枚 Key 的余额，支持 USD 等多币种并按汇率统一换算为人民币，金额用 BigInt 十进制精确计算；页面顶部汇总号池可用余额与累计消耗
-- **优先级管理**：设为当前、上移 / 下移、停用 / 启用、删除（同时清理该 Key 的专属凭据）
-- **自动切换**：模型请求明确返回 HTTP `402`（额度不足）时，按优先级换用下一枚可用 Key；其余错误原样交回官方处理
+- **批量导入**：每批 1–200 枚 Key，支持 `名称 | Key` 命名；只接受可打印 ASCII 且不含空白的 Key，导入结果会报告新增与跳过重复的数量；列表只显示脱敏 Key
+- **余额查询**：通过官方余额接口读取每枚 Key 的余额，查询端点跟随官方提供方配置的 `baseURL`（默认 `api.deepseek.com`）；支持 USD 等多币种并按汇率统一换算为人民币，金额用 BigInt 十进制精确计算；页面顶部汇总号池可用余额与累计消耗
+- **优先级管理**：搜索、分页（每页 20/50/100 条）、一键置顶、设为当前、上移 / 下移、停用 / 启用、删除（同时清理该 Key 的专属凭据）；249 枚 Key 也可顺畅管理
+- **自动切换**：模型请求明确返回 HTTP `402`（额度不足）时，按优先级换用下一枚可用 Key；其余错误原样交回官方处理。单个请求最多尝试 5 枚 Key，避免池内大面积 402 时无限重试
+- **状态保护**：一轮余额刷新只在末尾统一落盘一次；启动时自动生成 `state.json.bak`，元数据损坏时可按提示从备份恢复
 - **官方对齐**：正常请求复用官方提供方的实时配置、模型目录与传输实现，不维护第二套参数
 - **诊断日志**：请求失败只记录分类、错误码与耗时等脱敏信息，不保存完整 Key、提示词或正文
 
@@ -59,6 +60,7 @@
 | 模型请求返回 HTTP `402` | 标记该 Key 额度不足；自动切换开启时按优先级接续下一枚 |
 | `401` / `403`、限流、服务端或网络错误 | 不换 Key，保留官方错误与官方重试行为 |
 | 全部候选 Key 不可用 | 停止本轮并提示池状态 |
+| 单个请求已尝试 5 枚 Key 仍返回 `402` | 停止本轮并保留官方 402 错误；诊断日志记录 `KEY_POOL_ROTATION_LIMIT` |
 | 自动切换已关闭 | 只用手动选定的当前 Key，不可用时停止并提示 |
 
 余额统计按每枚 Key 独立记录：余额下降计入累计消耗，上升计入累计增加。这是按余额快照推算的统计，不是官方精确账单。同一账户下的多枚 Key 共享同一份账户余额，插件按 Key 展示与相加，不做账户去重。
@@ -67,8 +69,23 @@
 
 - 元数据存放在 `~/.dsh/plugins/deepseek-key-pool/state.json`（自定义 `DSH_HOME` 时在对应目录下），只保存名称、顺序、脱敏 Key、余额缓存与统计，**不保存完整 API Key**。
 - 完整 Key 交给 Harness 官方 credentials 服务管理；其默认本地实现是私有凭据文件，不是加密保险库或系统钥匙串。
+- 插件启动成功读取数据后，会在同目录生成 `state.json.bak` 作为最近一次可用元数据的备份；若 `state.json` 损坏，插件会明确提示两个文件的位置，可将 `.bak` 复制回 `state.json` 后重启（完整 Key 始终在官方凭据服务中，不受影响）。
 - 诊断日志位于同目录的 `request-errors.json`，仅保留最近 100 条。
 - 卸载插件不会自动删除数据；删除 Key 请在插件内逐条删除，以便同步清理凭据。
+
+## 更新记录
+
+### 0.7.0
+
+- 修复 DSH 0.2.2 / Cordis 4.1 的协议兼容：402 重试改为重新派发请求，非 Agent 原始流不再因 `next()` 单次调用限制而失败；重试固定沿用失败尝试的官方连接配置
+- 单请求换 Key 上限 5 枚，轮换上限写入诊断日志
+- 余额查询跟随官方提供方 `baseURL`，不再硬编码默认端点
+- 余额刷新改为整轮单次落盘，显著降低磁盘写入与锁竞争
+- 导入 Key 校验字符集；导入结果展示新增/重复数量；每批 1–200 的前端预校验
+- `state.json` 损坏提示与 `state.json.bak` 备份；官方提供方被停用时回退到官方 schema 默认值
+- 长列表支持搜索、分页与一键置顶；删除确认支持焦点管理与 Escape；统计口径说明上屏
+- UI 主题 token 收敛到官方公开 token，修复深色主题与字体设置一致性问题
+- 移除设置页中无法关闭设置层的「打开 Key 池管理」快捷入口，保留左侧栏入口
 
 ## 开发
 

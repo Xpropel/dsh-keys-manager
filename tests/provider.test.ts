@@ -6,12 +6,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as pause } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
-import { LlmRuntime, markAgentLoopRequest } from '@deepseek-ai/dsh-llm'
+import { LlmError, LlmRuntime, markAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { Options as OfficialOptions } from '@deepseek-ai/dsh-llm-deepseek-api-key'
 import { agentEvents } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { KeyPool } from '../src/pool.ts'
-import { PROVIDER, ROTATE_CODE, registerPoolProvider, rotateUnstartedStream } from '../src/provider.ts'
+import {
+  MAX_ROTATION_ATTEMPTS, PROVIDER, ROTATE_CODE, handleAuthRequestError, probeHostCapabilities,
+  registerPoolProvider, reportInvalidCredential, rotateUnstartedStream, warnMissingHostCapabilities,
+} from '../src/provider.ts'
 import type { PoolMetadata } from '../src/types.ts'
 
 const keyA = 'test-credential-integration-secret-aaaaaaaa'
@@ -70,10 +74,19 @@ function successResponse(response: ServerResponse, text = '备用 Key 成功'): 
 
 type RecordedRequest = { key: string; path: string; body: Record<string, unknown> }
 type Handler = (request: RecordedRequest, response: ServerResponse, incoming: IncomingMessage) => void | Promise<void>
+type SetupOptions = {
+  /** Build the isolated official configuration override from the local mock base URL. */
+  source?: (baseURL: string) => () => OfficialOptions
+  baselineTimeoutMs?: number
+  afterRequestDelayMs?: number
+  beforeProvider?: (ctx: Context) => void
+}
 
-async function setup(t: TestContext, handler: Handler, keys = [keyA, keyB]) {
+async function setup(t: TestContext, handler: Handler, keys = [keyA, keyB], options: SetupOptions = {}) {
+  let activeHandler = handler
   const calls: RecordedRequest[] = []
   const balanceCalls: string[] = []
+  const balanceUrls: string[] = []
   const trace: Array<{ kind: 'balance' | 'model'; key: string }> = []
   let balanceHandler = async (_key: string): Promise<Response> => Response.json({ is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '1.00' }] })
   const handlerErrors: unknown[] = []
@@ -88,7 +101,7 @@ async function setup(t: TestContext, handler: Handler, keys = [keyA, keyB]) {
       calls.push(call)
       trace.push({ kind: 'model', key: call.key })
       if (calls.length > 30) { errorResponse(response, 500, 'retry-limit'); return }
-      await handler(call, response, incoming)
+      await activeHandler(call, response, incoming)
     })().catch(error => {
       handlerErrors.push(error)
       if (!response.headersSent) response.writeHead(500)
@@ -101,6 +114,7 @@ async function setup(t: TestContext, handler: Handler, keys = [keyA, keyB]) {
   })
   const address = server.address()
   assert.ok(address && typeof address === 'object')
+  const baseURL = `http://127.0.0.1:${address.port}`
   const credentials = new Map<string, string>()
   let saved: PoolMetadata | undefined
   let failSave = false
@@ -114,13 +128,18 @@ async function setup(t: TestContext, handler: Handler, keys = [keyA, keyB]) {
       load: async () => saved,
       save: async value => { if (failSave) throw Error('synthetic metadata write failure'); saved = structuredClone(value) },
     },
-    fetch: async (_url, init) => {
+    fetch: async (url, init) => {
       const key = new Headers(init?.headers).get('authorization')!.slice('Bearer '.length)
       balanceCalls.push(key)
+      balanceUrls.push(String(url))
       trace.push({ kind: 'balance', key })
       return balanceHandler(key)
     },
-  }, { baselineTimeoutMs: 100, afterRequestDelayMs: 10, minimumRefreshIntervalMs: 20 })
+  }, {
+    baselineTimeoutMs: options.baselineTimeoutMs ?? 100,
+    afterRequestDelayMs: options.afterRequestDelayMs ?? 10,
+    minimumRefreshIntervalMs: 20,
+  })
   const ctx = new Context()
   t.after(async () => {
     pool.stop()
@@ -135,17 +154,67 @@ async function setup(t: TestContext, handler: Handler, keys = [keyA, keyB]) {
     ? await pool.importKeys(keys.map((key, index) => ({ key, label: `测试 Key ${index + 1}` })))
     : { addedIds: [] }
   await ctx.plugin(LlmRuntime)
+  options.beforeProvider?.(ctx)
+  const officialOptions = options.source?.(baseURL)
+  let provider: ReturnType<typeof registerPoolProvider> | undefined
   const fiber = ctx.plugin({
     name: 'test-pool-provider', inject: ['llm'],
-    apply(child: Context) { registerPoolProvider(child, pool, { baseURL: `http://127.0.0.1:${address.port}` }) },
+    apply(child: Context) {
+      provider = registerPoolProvider(child, pool, officialOptions === undefined
+        ? { baseURL }
+        : { options: officialOptions })
+    },
   })
   await fiber
   return {
-    ctx, pool, calls, balanceCalls, trace, addedIds, fiber,
+    ctx, pool, calls, balanceCalls, balanceUrls, trace, addedIds, fiber, baseURL,
+    get provider() { return provider! },
+    setCredential(id: string, value: string | undefined) {
+      const ref = `DSH_KEY_POOL_${id.replaceAll('-', '_').toUpperCase()}`
+      if (value === undefined) credentials.delete(ref)
+      else credentials.set(ref, value)
+    },
     setSaveFailure(value: boolean) { failSave = value },
+    setHandler(next: Handler) { activeHandler = next },
     setBalanceHandler(handler: (key: string) => Promise<Response>) { balanceHandler = handler },
   }
 }
+
+/**
+ * Reproduce Cordis 4.1's per-listener single-use `next()` guard on this checkout's
+ * Cordis 4.0.5 event bus, so the real `ctx.llm.stream` waterfall can be exercised
+ * under the installed Host semantics.
+ */
+function installCordis41WaterfallGuard(ctx: Context): () => void {
+  const events = ctx.events as never as {
+    waterfall: (...args: never[]) => unknown
+    dispatch: (type: string, args: never[]) => Array<(...args: never[]) => unknown>
+  }
+  const hadOwn = Object.prototype.hasOwnProperty.call(events, 'waterfall')
+  const original = events.waterfall
+  const guarded = function (this: typeof events, ...args: unknown[]) {
+    const callbacks = this.dispatch('waterfall', args as never[])
+    const inner = args.pop() as () => unknown
+    const dispatch = (): unknown => {
+      const callback = callbacks.shift()
+      if (callback === undefined) return inner()
+      let called = false
+      const next = (): unknown => {
+        if (called) throw new Error('next() called multiple times')
+        called = true
+        return dispatch()
+      }
+      return callback(...args as never[], next as never)
+    }
+    return dispatch()
+  }
+  events.waterfall = guarded
+  return () => {
+    if (hadOwn) events.waterfall = original
+    else Reflect.deleteProperty(events, 'waterfall')
+  }
+}
+
 
 async function until(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   const deadline = performance.now() + timeoutMs
@@ -264,6 +333,9 @@ test('a concurrent late 402 affects its exact leased key while a late 401 remain
   await fixture.pool.setActive(fixture.addedIds[2]!)
   errorResponse(responseB, 402, keyB)
   const secondResult = await second
+  // The rotated key's first-use observation continues in the background; it must
+  // still land without delaying the rotation request itself.
+  await until(() => fixture.pool.snapshot().keys[2]!.status === 'ready')
   errorResponse(responseA, 401, keyA)
   const firstResult = await first
   assert.equal(fixture.pool.snapshot().keys[0]!.status, 'ready')
@@ -394,7 +466,9 @@ test('automatic post-failure checks record balances but cannot reopen a 402 loop
   fixture.setBalanceHandler(async () => Response.json({ is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '0.10' }] }))
   const chunks = await collect(fixture.ctx.llm.stream(request()))
   assert.equal(terminalFailure(chunks).status, 402)
-  await until(() => fixture.balanceCalls.length >= 4)
+  // A keeps its awaited first-use baseline plus a post-failure check; the rotated
+  // key's skipped baseline and its post-failure check coalesce into one refresh.
+  await until(() => fixture.balanceCalls.length >= 3)
   await pause(10)
   assert.deepEqual(fixture.calls.map(call => call.key), [keyA, keyB])
   assert.equal(fixture.pool.snapshot().keys.every(key => key.status === 'exhausted'), true)
@@ -540,4 +614,235 @@ test('canceling after rc.5 call preparation prevents authentication, balance que
   assert.ok(finish?.type === 'finish' && finish.reason.kind === 'aborted')
   assert.equal(fixture.balanceCalls.length, 0)
   assert.equal(fixture.calls.length, 0)
+})
+
+const manyKeys = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(suffix => `test-credential-integration-secret-${suffix.repeat(8)}`)
+
+test('a raw 402 rotates under a Cordis 4.1 single-call-next waterfall while agent recovery stays delegated', { timeout: 10000 }, async t => {
+  const fixture = await setup(t, (call, response) => {
+    if (call.key === manyKeys[0]) errorResponse(response, 402, call.key)
+    else successResponse(response, 'guarded 4.1 rotation')
+  }, [manyKeys[0]!, manyKeys[1]!])
+  const restore = installCordis41WaterfallGuard(fixture.ctx)
+  t.after(restore)
+  // A reused `next()` would throw `next() called multiple times` here; the retry
+  // must enter a fresh waterfall via ctx.llm.stream instead.
+  const raw = await collect(fixture.ctx.llm.stream(request()))
+  assert.deepEqual(fixture.calls.map(call => call.key), [manyKeys[0], manyKeys[1]])
+  assert.deepEqual(raw.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text), ['guarded 4.1 rotation'])
+  // The agent path still surfaces its failure to the durable recovery seam instead
+  // of rotating inline, and a later fresh request succeeds on the next key.
+  await fixture.pool.refresh()
+  await fixture.pool.setActive(fixture.addedIds[0]!)
+  fixture.setHandler((call, response) => {
+    if (call.key === manyKeys[0]) errorResponse(response, 402, call.key)
+    else successResponse(response, 'guarded agent recovery')
+  })
+  const failed = await collect(fixture.ctx.llm.stream(markAgentLoopRequest(request())))
+  assert.equal(terminalFailure(failed).code, ROTATE_CODE)
+  assert.deepEqual(fixture.calls.map(call => call.key), [manyKeys[0], manyKeys[1], manyKeys[0]])
+  const payload = {
+    agent: agentIdentity(), provider: PROVIDER, turn: 1, step: 1, failure: terminalFailure(failed),
+    retryPolicy: undefined, signal: new AbortController().signal,
+  }
+  assert.deepEqual(await fixture.ctx.waterfall('agent/request-error', payload, async () => undefined), { kind: 'retry' })
+  const recovered = await collect(fixture.ctx.llm.stream(markAgentLoopRequest(request())))
+  assert.deepEqual(recovered.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text), ['guarded agent recovery'])
+  assert.deepEqual(fixture.calls.map(call => call.key), [manyKeys[0], manyKeys[1], manyKeys[0], manyKeys[1]])
+})
+
+test('a redispatch mark stays visible to an asynchronous intermediate llm/stream listener for the whole retry stream', { timeout: 8000 }, async t => {
+  const observations: Array<{ marked: boolean }> = []
+  let handle: ReturnType<typeof registerPoolProvider> | undefined
+  const fixture = await setup(t, (call, response) => {
+    if (call.key === keyA) errorResponse(response, 402, call.key)
+    else successResponse(response)
+  }, [keyA, keyB], {
+    beforeProvider(ctx) {
+      ctx.on('llm/stream', (incoming, next) => {
+        if (incoming.provider !== PROVIDER) return next()
+        // This listener returns its wrapper synchronously but calls `next()` only
+        // after an await, i.e. after the outer `ctx.llm.stream()` already returned.
+        return (async function* () {
+          await pause(0)
+          observations.push({ marked: handle?.redispatch.has(incoming) ?? false })
+          yield* next()
+        })()
+      })
+    },
+  })
+  handle = fixture.provider
+  const firstRequest = request()
+  const chunks = await collect(fixture.ctx.llm.stream(firstRequest))
+  assert.deepEqual(fixture.calls.map(call => call.key), [keyA, keyB])
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text), ['备用 Key 成功'])
+  // The initial dispatch is a new request; only the 402 retry carries the mark.
+  assert.deepEqual(observations, [{ marked: false }, { marked: true }])
+  // The mark is released once the retry stream has been fully consumed.
+  assert.equal(handle.redispatch.has(firstRequest), false)
+})
+
+test('continuous 402 terminates after five credential attempts and records the rotation limit', { timeout: 10000 }, async t => {
+  const fixture = await setup(t, (call, response) => errorResponse(response, 402, call.key), manyKeys)
+  const chunks = await collect(fixture.ctx.llm.stream(request()))
+  assert.equal(fixture.calls.length, MAX_ROTATION_ATTEMPTS)
+  assert.deepEqual(fixture.calls.map(call => call.key), manyKeys.slice(0, MAX_ROTATION_ATTEMPTS))
+  const failure = terminalFailure(chunks)
+  assert.equal(failure.code, ROTATE_CODE)
+  assert.equal(failure.status, 402)
+  assert.equal(fixture.pool.snapshot().keys[4]!.status, 'exhausted')
+  assert.equal(fixture.pool.snapshot().keys[5]!.status, 'unknown')
+  await fixture.fiber.dispose()
+  const diagnostics = JSON.parse(await readFile(join(dshTestDirectory, 'plugins/deepseek-key-pool/request-errors.json'), 'utf8'))
+  const entry = diagnostics.entries.find((item: { code: string }) => item.code === 'KEY_POOL_ROTATION_LIMIT')
+  assert.ok(entry, 'Expected a KEY_POOL_ROTATION_LIMIT diagnostic')
+  assert.equal(entry.status, 402)
+  assertRedacted(diagnostics)
+})
+
+test('the rotation recovery budget shares the five-attempt cap and resets per step and per agent', { timeout: 5000 }, async t => {
+  const fixture = await setup(t, (_call, response) => successResponse(response), manyKeys)
+  const failure = { code: ROTATE_CODE, status: 402, message: 'safe error' }
+  const agent = agentIdentity()
+  const decide = (step: number, owner: Agent = agent) => fixture.ctx.waterfall('agent/request-error', {
+    agent: owner, provider: PROVIDER, turn: 1, step, failure, retryPolicy: undefined,
+    signal: new AbortController().signal,
+  }, async () => undefined)
+  let allowed = 0
+  while (await decide(1) !== undefined) allowed++
+  assert.equal(allowed, MAX_ROTATION_ATTEMPTS - 1)
+  // Replenishing keys does not extend the same step's spent budget.
+  await fixture.pool.refresh()
+  assert.equal(await decide(1), undefined)
+  assert.deepEqual(await decide(2), { kind: 'retry' })
+  assert.deepEqual(await decide(1, agentIdentity()), { kind: 'retry' })
+})
+
+test('a 402 rotation does not wait for another first-use baseline check', { timeout: 8000 }, async t => {
+  const fixture = await setup(t, (call, response) => {
+    if (call.key === keyA) errorResponse(response, 402, call.key)
+    else successResponse(response)
+  }, [keyA, keyB], { afterRequestDelayMs: 500 })
+  await collect(fixture.ctx.llm.stream(request()))
+  assert.deepEqual(fixture.calls.map(call => call.key), [keyA, keyB])
+  // The first credential still establishes its baseline before dispatch...
+  assert.deepEqual(fixture.trace.slice(0, 2), [{ kind: 'balance', key: keyA }, { kind: 'model', key: keyA }])
+  // ...while the rotated key's baseline is observed in the background, not awaited.
+  assert.deepEqual(fixture.balanceCalls, [keyA])
+})
+
+test('a 402 retry keeps the failed attempt connection instead of re-reading official configuration', { timeout: 8000 }, async t => {
+  const unexpected: string[] = []
+  const second = createServer((incoming, response) => {
+    unexpected.push(String(incoming.headers['x-api-key'] ?? ''))
+    response.writeHead(500, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: { type: 'api_error', message: 'unexpected rerouted retry' } }))
+  })
+  await new Promise<void>((resolve, reject) => {
+    second.once('error', reject)
+    second.listen(0, '127.0.0.1', resolve)
+  })
+  t.after(async () => {
+    second.closeAllConnections()
+    await new Promise<void>(resolve => second.close(() => resolve()))
+  })
+  const secondAddress = second.address()
+  assert.ok(secondAddress && typeof secondAddress === 'object')
+  const secondURL = `http://127.0.0.1:${secondAddress.port}`
+  let activeBase = ''
+  const fixture = await setup(t, (call, response) => {
+    if (call.key === keyA) {
+      // The retry must not observe this configuration change: it is pinned to the
+      // connection of the failed attempt.
+      activeBase = secondURL
+      errorResponse(response, 402, call.key)
+      return
+    }
+    successResponse(response, 'pinned connection rotation')
+  }, [keyA, keyB], {
+    source: serverBase => {
+      activeBase = serverBase
+      return () => ({ baseURL: activeBase })
+    },
+  })
+  const chunks = await collect(fixture.ctx.llm.stream(request()))
+  assert.deepEqual(fixture.calls.map(call => call.key), [keyA, keyB])
+  assert.deepEqual(unexpected, [])
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text), ['pinned connection rotation'])
+})
+
+test('an INVALID_CREDENTIAL report only marks its key and leaves the official error unchanged', { timeout: 5000 }, async t => {
+  const fixture = await setup(t, (_call, response) => successResponse(response))
+  const reported: string[] = []
+  const original = fixture.pool.reportInvalidCredential.bind(fixture.pool)
+  fixture.pool.reportInvalidCredential = async (id: string) => { reported.push(id); await original(id) }
+  type Connection = Parameters<typeof handleAuthRequestError>[0]['connection']
+  const connection = {} as unknown as Connection
+  const requestScope = {
+    usedIds: new Set<string>(), requestId: 'synthetic', model: 'deepseek-flash', startedAt: Date.now(), receivedChunks: 0,
+    rotationConnection: undefined,
+  } satisfies Parameters<typeof handleAuthRequestError>[0]['request']
+  const invalid = new LlmError('synthetic invalid credential', 'INVALID_CREDENTIAL')
+  assert.strictEqual(await handleAuthRequestError({
+    pool: fixture.pool, leaseId: fixture.addedIds[0]!, connection, request: requestScope, error: invalid,
+  }), invalid)
+  assert.deepEqual(reported, [fixture.addedIds[0]])
+  assert.equal(requestScope.rotationConnection, undefined)
+  await until(() => fixture.pool.snapshot().keys[0]!.status === 'invalid')
+  // A 402 still pins the failed attempt's connection and returns the covered error.
+  const quota = new LlmError('synthetic quota response', 'QUOTA', { status: 402 })
+  assert.equal(reportInvalidCredential(fixture.pool, fixture.addedIds[1]!, quota), false)
+  const mapped = await handleAuthRequestError({
+    pool: fixture.pool, leaseId: fixture.addedIds[1]!, connection, request: requestScope, error: quota,
+  })
+  assert.ok(mapped instanceof LlmError)
+  assert.equal(mapped.failure.code, ROTATE_CODE)
+  assert.equal(requestScope.rotationConnection, connection)
+  assert.equal(fixture.pool.snapshot().keys[1]!.status, 'exhausted')
+})
+
+test('the capability probe reports old Host seams without throwing and warns once', t => {
+  const bare = new Context()
+  const missing = probeHostCapabilities(bare)
+  assert.ok(missing.includes('llm'))
+  assert.ok(missing.includes('official-config-discovery'))
+  assert.deepEqual(probeHostCapabilities({} as Context).includes('cordis-context'), true)
+  const llmOnly = new Context()
+  llmOnly.provide('llm', {} as never)
+  assert.deepEqual(probeHostCapabilities(llmOnly, true), [])
+  // A legacy product host exposes discovery but not Cordis 4.1 effectiveConfig.
+  llmOnly.provide('configEditor', { entries: () => [] } as never)
+  assert.deepEqual(probeHostCapabilities(llmOnly), ['fiber.effectiveConfig'])
+  const warnings: string[] = []
+  t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args.map(String).join(' ')) })
+  assert.equal(warnMissingHostCapabilities(missing), true)
+  assert.equal(warnMissingHostCapabilities(missing), false)
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0]!, /宿主版本/)
+})
+
+test('an unusable stored credential is reported invalid while the official INVALID_CREDENTIAL error is preserved', { timeout: 5000 }, async t => {
+  const fixture = await setup(t, (_call, response) => successResponse(response))
+  // Non-whitespace but impossible in an HTTP header: the pool accepts the lease,
+  // while the official key assertion classifies it as INVALID_CREDENTIAL.
+  fixture.setCredential(fixture.addedIds[0]!, 'bad-\u00e9-credential')
+  const chunks = await collect(fixture.ctx.llm.stream(request()))
+  const terminal = terminalFailure(chunks)
+  assert.equal(terminal.code, 'INVALID_CREDENTIAL')
+  assert.match(terminal.message, /no HTTP header can carry/)
+  assert.equal(fixture.calls.length, 0, 'The invalid credential must not reach the transport')
+  await until(() => fixture.pool.snapshot().keys[0]!.status === 'invalid')
+  // The next request skips the now-invalid key and succeeds on the backup.
+  const recovered = await collect(fixture.ctx.llm.stream(request()))
+  assert.deepEqual(fixture.calls.map(call => call.key), [keyB])
+  assert.deepEqual(recovered.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text), ['备用 Key 成功'])
+})
+
+test('balance checks follow the official connection baseURL through the pool resolver', { timeout: 5000 }, async t => {
+  const fixture = await setup(t, (_call, response) => successResponse(response), [])
+  // Freshly imported keys have no balance yet; an explicit refresh exercises the resolver.
+  await fixture.pool.importKeys([{ key: keyA }, { key: keyB }])
+  await fixture.pool.refresh()
+  const expected = new URL('/user/balance', `${fixture.baseURL}/anthropic`).href
+  assert.deepEqual(fixture.balanceUrls, [expected, expected])
 })

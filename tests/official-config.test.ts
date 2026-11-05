@@ -153,12 +153,9 @@ test('SettingsForms plain values can supply a known namespace without Loader ent
   assert.deepEqual(createOfficialConnectionSource(ctx).get(), expected(input, ctx))
 })
 
-test('an existing disabled, missing, or invalid live official configuration never silently becomes defaults', () => {
+test('an unready, missing, or invalid live official configuration never silently becomes defaults', () => {
   const f = fixture({ maxTokens: 600 })
   assert.equal(f.source.get().maxTokens, 600)
-  Object.defineProperty(f.entry, 'disabled', { value: true, configurable: true })
-  assert.throws(() => f.source.get(), { code: 'KEY_POOL_CONFIG_UNAVAILABLE' })
-  Object.defineProperty(f.entry, 'disabled', { value: false, configurable: true })
   f.fiber.config = undefined
   assert.throws(() => f.source.get(), { code: 'KEY_POOL_CONFIG_UNAVAILABLE' })
   f.directory([]); f.entries([])
@@ -166,6 +163,31 @@ test('an existing disabled, missing, or invalid live official configuration neve
   const host = new Context()
   host.provide('configEditor', { entries: () => [] } as unknown as ConfigEditor)
   assert.throws(() => createOfficialConnectionSource(host).get(), { code: 'KEY_POOL_CONFIG_UNAVAILABLE' })
+})
+
+test('an explicitly disabled official provider follows validated schema defaults and warns once', async () => {
+  const warnings: string[] = []
+  const originalWarn = console.warn
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')) }
+  try {
+    const f = fixture({ maxTokens: 600 })
+    Object.defineProperty(f.entry, 'disabled', { value: true, configurable: true })
+    assert.deepEqual(f.source.get(), expected({}, f.ctx))
+    assert.deepEqual(f.source.get(), expected({}, f.ctx))
+    assert.equal(warnings.filter(line => line.includes('停用')).length, 1)
+    // Re-enabling restores the live official configuration and notifies observers.
+    const seen: number[] = []
+    const release = f.source.subscribe(() => seen.push(f.source.get().maxTokens))
+    Object.defineProperty(f.entry, 'disabled', { value: false, configurable: true })
+    f.ctx.emit('loader/config-update')
+    await turn()
+    assert.deepEqual(seen, [600])
+    release()
+    // Even without a mounted fiber, a disabled entry is an explicit user choice.
+    const g = fixture({ maxTokens: 700 })
+    g.entries([{ options: g.entry.options, disabled: true } as unknown as Entry])
+    assert.deepEqual(g.source.get(), expected({}, g.ctx))
+  } finally { console.warn = originalWarn }
 })
 
 test('configuration-reader failures use a fixed safe error and never expose its raw text', () => {

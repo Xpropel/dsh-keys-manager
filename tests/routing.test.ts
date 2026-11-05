@@ -5,9 +5,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import { RoutingController, poolTarget, parseRoutingCatalog, type CurrentRoute, type RouteSelection, type RoutingSessionSource } from '../src/client/routing.ts'
 import { RoutingStatus } from '../src/client/Routing.tsx'
+import { en, type Translate } from '../src/client/locales.ts'
 
 const original: RouteSelection = { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' }
 const target: RouteSelection = { ...original, provider: 'deepseek-key-pool' }
+const translateEn: Translate = (key, params) => en[key].replace(/\{(\w+)\}/g, (match, name: string) => String(params?.[name] ?? match))
 
 function fixture() {
   let defaultSelection = { ...original }
@@ -184,4 +186,20 @@ test('effective source reasoning defaults are preserved when the session has no 
     { id: 'deepseek-key-pool', models: [{ id: 'deepseek-flash', reasoning: { efforts: [{ id: 'max' }] } }] },
   ] })
   assert.deepEqual(poolTarget({ provider: 'deepseek-official', model: 'deepseek-flash' }, catalog), target)
+})
+
+test('routing copy is owned by the locale namespace and renders in both languages', async () => {
+  const f = fixture()
+  try {
+    await f.controller.refresh()
+    const zh = renderToStaticMarkup(createElement(RoutingStatus, { controller: f.controller }))
+    assert.match(zh, /<h2/)
+    assert.match(zh, /模型连接状态/)
+    assert.match(zh, /未经过 Key 池/)
+    const english = renderToStaticMarkup(createElement(RoutingStatus, { controller: f.controller, t: translateEn }))
+    assert.match(english, /Model connection/)
+    assert.match(english, /Bypassing Key Pool/)
+    assert.match(english, /Make default/)
+    assert.doesNotMatch(english, /模型连接状态/)
+  } finally { f.controller.dispose() }
 })

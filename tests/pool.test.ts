@@ -65,9 +65,14 @@ test('imports normalized unique keys, masks secrets, and isolates snapshot copie
 test('rejects invalid batches atomically and never places full keys in labels', async (t) => {
   const { pool, secrets } = fixture();
   t.after(() => pool.stop());
-  for (const inputs of [[], [{ key: '' }], [{ key: 'sk bad' }], [{ key: 'sk\nbad' }],
-    [{ key: keyA }, { key: keyB, label: keyB }], [{ key: keyA, label: keyB }, { key: keyB }],
-    Array.from({ length: 201 }, () => ({ key: keyA }))]) {
+  for (const inputs of [[], Array.from({ length: 201 }, () => ({ key: keyA }))]) {
+    await assert.rejects(pool.importKeys(inputs), (error: unknown) => error instanceof PoolError && error.code === 'VALIDATION');
+  }
+  for (const inputs of [[{ key: '' }], [{ key: '   ' }], [{ key: 'sk bad' }], [{ key: 'sk\nbad' }],
+    [{ key: '密钥密钥密钥' }], [{ key: 'sk\u007fkey' }], [{ key: 'x'.repeat(513) }]]) {
+    await assert.rejects(pool.importKeys(inputs), (error: unknown) => error instanceof PoolError && error.code === 'INVALID_KEY');
+  }
+  for (const inputs of [[{ key: keyA }, { key: keyB, label: keyB }], [{ key: keyA, label: keyB }, { key: keyB }]]) {
     await assert.rejects(pool.importKeys(inputs), (error: unknown) => error instanceof PoolError && error.code === 'VALIDATION');
   }
   assert.equal(pool.snapshot().keys.length, 0);
@@ -93,7 +98,7 @@ test('keeps a sticky active key and uses explicit priority after 402', async (t)
   assert.equal(pool.snapshot().keys.find((entry) => entry.id === a)?.enabled, true);
   assert.equal(pool.snapshot().keys.find((entry) => entry.id === a)?.status, 'exhausted');
   assert.equal((await pool.acquire()).id, c);
-  await pool.reportFailure(c!, 401);
+  await pool.reportInvalidCredential(c!);
   assert.equal((await pool.acquire()).id, b);
   await pool.reportFailure(b!, 402);
   await assert.rejects(pool.acquire(), { code: 'NO_AVAILABLE_KEY' });
@@ -106,7 +111,7 @@ test('does not switch a failed active key when automatic switching is disabled',
   t.after(() => pool.stop());
   const { addedIds: [a, b] } = await pool.importKeys([{ key: keyA }, { key: keyB }]);
   await pool.updateSettings({ autoSwitch: false });
-  await pool.markExhausted(a!);
+  await pool.reportFailure(a!, 402);
   assert.equal(pool.snapshot().activeId, a);
   await assert.rejects(pool.acquire(), { code: 'ACTIVE_KEY_UNAVAILABLE' });
   await pool.setActive(b!);
@@ -170,7 +175,7 @@ test('a failed refresh cannot reactivate exhausted keys; a successful refresh ca
   const { pool } = fixture({ fetch: async () => { if (fail) throw Error('offline'); return balance(); } });
   t.after(() => pool.stop());
   const { addedIds: [id] } = await pool.importKeys([{ key: keyA }]);
-  await pool.markExhausted(id!);
+  await pool.reportFailure(id!, 402);
   fail = true;
   await pool.refresh(id);
   assert.equal(pool.snapshot().keys[0]!.status, 'exhausted');
@@ -189,7 +194,7 @@ test('new failure events win over a previously started balance response', async 
   const { addedIds: [id] } = await pool.importKeys([{ key: keyA }]);
   const refresh = pool.refresh(id);
   await started.promise;
-  await pool.reportFailure(id!, 401);
+  await pool.reportInvalidCredential(id!);
   gate.resolve(balance('99.00'));
   await refresh;
   assert.equal(pool.snapshot().keys[0]!.status, 'invalid');
@@ -250,13 +255,30 @@ test('times out balance requests without leaking secrets', async (t) => {
   assert.equal(JSON.stringify(pool.snapshot()).includes(keyA), false);
 });
 
-test('unrelated HTTP failures do not mark a key exhausted', async (t) => {
+test('unrelated HTTP failures do not mark a key exhausted or invalid', async (t) => {
   const { pool } = fixture();
   t.after(() => pool.stop());
   const { addedIds: [id] } = await pool.importKeys([{ key: keyA }]);
-  for (const status of [400, 429, 500, 503]) await pool.reportFailure(id!, status);
+  // 401 lost its special case on purpose: only the provider's INVALID_CREDENTIAL path disables a key.
+  for (const status of [400, 401, 429, 500, 503]) await pool.reportFailure(id!, status);
   assert.equal(pool.snapshot().keys[0]!.status, 'unknown');
   assert.equal((await pool.acquire()).id, id);
+});
+
+test('reportInvalidCredential disables only the rejected key and selects a fallback', async (t) => {
+  const { pool, saved } = fixture();
+  t.after(() => pool.stop());
+  const { addedIds: [a, b] } = await pool.importKeys([{ key: keyA }, { key: keyB }]);
+  await pool.reportInvalidCredential(a!);
+  const entry = pool.snapshot().keys.find((key) => key.id === a)!;
+  assert.equal(entry.status, 'invalid');
+  assert.match(entry.lastError!, /认证失败/);
+  assert.equal(pool.snapshot().activeId, b);
+  assert.equal(saved()!.keys[0]!.status, 'invalid');
+  assert.equal(pool.snapshot().events.some((event) => event.kind === 'invalid'), true);
+  // Reporting again is idempotent and does not throw for an already invalid key.
+  await pool.reportInvalidCredential(a!);
+  assert.equal((await pool.acquire()).id, b);
 });
 
 test('missing credentials are marked invalid and fail over', async (t) => {
@@ -492,7 +514,7 @@ test('only an empty unavailable balance response derives a zero observation', as
   t.after(() => pool.stop());
   const { addedIds: [id] } = await pool.importKeys([{ key: keyA }]);
   await pool.refresh(id);
-  await pool.markExhausted(id!);
+  await pool.reportFailure(id!, 402);
   assert.equal(pool.snapshot().keys[0]!.statistics.totalConsumedCny, '0');
   assert.equal(pool.snapshot().keys[0]!.balanceCny, '0.12345678901234567890');
   response = new Response(JSON.stringify({ is_available: false, balance_infos: [] }));
@@ -875,4 +897,102 @@ test('stop aborts an active scheduled check and settles all coalesced waiters', 
   await Promise.all([first, second]);
   assert.equal(aborted, true);
   assert.equal(pool.snapshot().keys[0]!.statistics.startedAt, null);
+});
+
+function countingFixture(fetchImpl: KeyPoolOptions['fetch'] = async () => balance(), now = () => 1234567890) {
+  const secrets = new Map<string, string>();
+  let saved: PoolMetadata | undefined;
+  let saves = 0;
+  const pool = new KeyPool({
+    credentials: {
+      async resolve(ref) { return secrets.get(ref); },
+      async set(ref, value) { secrets.set(ref, value); },
+      async unset(ref) { secrets.delete(ref); },
+    },
+    metadata: {
+      async load() { return saved ? structuredClone(saved) : undefined; },
+      async save(value) { saves++; saved = structuredClone(value); },
+    },
+    now,
+    fetch: fetchImpl,
+  });
+  return { pool, secrets, saveCount: () => saves };
+}
+
+test('balance checks follow the official base URL and fall back on any unusable value', async (t) => {
+  const urls: string[] = [];
+  const { pool } = countingFixture(async (url) => { urls.push(String(url)); return balance('5.00'); });
+  t.after(() => pool.stop());
+  await pool.importKeys([{ key: keyA }]);
+  await pool.refresh();
+  assert.equal(urls[0], 'https://api.deepseek.com/user/balance');
+  pool.useBalanceBaseURL(() => 'https://gateway.example.com/v1');
+  await pool.refresh();
+  assert.equal(urls[1], 'https://gateway.example.com/user/balance');
+  pool.useBalanceBaseURL(() => 'not a url');
+  await pool.refresh();
+  assert.equal(urls[2], 'https://api.deepseek.com/user/balance');
+  pool.useBalanceBaseURL(() => { throw new Error('synthetic invalid provider configuration'); });
+  await pool.refresh();
+  assert.equal(urls[3], 'https://api.deepseek.com/user/balance');
+  pool.useBalanceBaseURL(() => 'ftp://mirror.example.com');
+  await pool.refresh();
+  assert.equal(urls[4], 'https://api.deepseek.com/user/balance');
+  pool.useBalanceBaseURL(() => undefined);
+  await pool.refresh();
+  assert.equal(urls[5], 'https://api.deepseek.com/user/balance');
+});
+
+test('a 200-key full refresh persists the whole round only once', async (t) => {
+  const { pool, saveCount } = countingFixture();
+  t.after(() => pool.stop());
+  await pool.importKeys(Array.from({ length: 200 }, (_, index) => ({ key: `test-secret-batch-${String(index).padStart(3, '0')}` })));
+  assert.equal(saveCount(), 1);
+  await pool.refresh();
+  assert.equal(pool.snapshot().keys.length, 200);
+  assert.equal(pool.snapshot().keys.every((entry) => entry.status === 'ready' && entry.balanceCny === '10.00'), true);
+  assert.equal(saveCount(), 2);
+});
+
+test('a refresh round without observable change does not rewrite metadata', async (t) => {
+  const { pool, saveCount } = countingFixture();
+  t.after(() => pool.stop());
+  await pool.importKeys([{ key: keyA }]);
+  await pool.refresh();
+  assert.equal(saveCount(), 2);
+  const persisted = pool.snapshot();
+  await pool.refresh();
+  await pool.refresh();
+  assert.equal(saveCount(), 2);
+  assert.deepEqual(pool.snapshot().keys, persisted.keys);
+});
+
+test('an aborted full refresh commits the updates it observed exactly once', async (t) => {
+  const allStarted = deferred<void>();
+  let calls = 0;
+  const { pool, saveCount } = countingFixture(async (_url, init) => {
+    const authorization = new Headers(init?.headers).get('authorization')!;
+    if (++calls === 3) allStarted.resolve();
+    if (authorization.includes(keyA)) return balance('7.00');
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    });
+  });
+  t.after(() => pool.stop());
+  await pool.importKeys([{ key: keyA }, { key: keyB }, { key: keyC }]);
+  assert.equal(saveCount(), 1);
+  const ids = pool.snapshot().keys.map((entry) => entry.id);
+  const controller = new AbortController();
+  type BatchRefresh = (ids: string[], options: { allowRecovery: boolean; signal: AbortSignal }) => Promise<void>;
+  const round = (pool as unknown as { refreshIds: BatchRefresh }).refreshIds(ids, { allowRecovery: true, signal: controller.signal });
+  await allStarted.promise;
+  controller.abort();
+  await round;
+  // Three keys were refreshed, but the observed outcomes are written by one commit.
+  assert.equal(saveCount(), 2);
+  const observed = pool.snapshot().keys.find((entry) => entry.id === ids[0])!;
+  assert.equal(observed.status, 'ready');
+  assert.equal(observed.balanceCny, '7.00');
+  const canceled = pool.snapshot().keys.filter((entry) => entry.id !== ids[0]);
+  assert.equal(canceled.every((entry) => entry.status === 'error'), true);
 });

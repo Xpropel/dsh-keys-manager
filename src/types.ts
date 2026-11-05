@@ -81,12 +81,20 @@ export interface LegacyPoolMetadata {
 
 export type StoredPoolMetadata = PoolMetadata | LegacyPoolMetadata;
 
+/** Counts from one import request; carried by the importKeys response only, never persisted. */
+export interface ImportSummary {
+  added: number;
+  duplicates: number;
+}
+
 export interface PoolSnapshot {
   keys: KeySnapshot[];
   activeId: string | null;
   settings: PoolSettings;
   /** Most recent 50 status events from this process; never persisted. */
   events: PoolEvent[];
+  /** Present only on the importKeys response, so the UI can report what actually happened. */
+  importSummary?: ImportSummary;
 }
 
 export interface PoolEvent {

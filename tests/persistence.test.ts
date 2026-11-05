@@ -201,3 +201,40 @@ test('legacy files migrate without inventing history and observation time surviv
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+test('a successful load refreshes a private state.json.bak recovery copy', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-key-pool-backup-'))
+  try {
+    const file = join(directory, 'plugin', 'state.json')
+    const store = createMetadataStore(file)
+    await store.load()
+    await store.save(empty)
+    assert.deepEqual(await createMetadataStore(file).load(), empty)
+    const backup = await readFile(`${file}.bak`, 'utf8')
+    assert.deepEqual(JSON.parse(backup), empty)
+    if (process.platform !== 'win32') assert.equal((await stat(`${file}.bak`)).mode & 0o777, 0o600)
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
+
+test('a corrupt load names both files and preserves the damage and the previous backup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-key-pool-backup-corrupt-'))
+  try {
+    const file = join(directory, 'plugin', 'state.json')
+    const store = createMetadataStore(file)
+    await store.load()
+    await store.save(empty)
+    await createMetadataStore(file).load()
+    const backupBefore = await readFile(`${file}.bak`)
+    await writeFile(file, 'broken-json')
+    await assert.rejects(createMetadataStore(file).load(), (error: unknown) => {
+      const message = String(error)
+      assert.ok(message.includes(file), 'the damaged file path must be reported')
+      assert.ok(message.includes(`${file}.bak`), 'the recovery backup path must be reported')
+      assert.match(message, /恢复/)
+      assert.equal(message.includes('broken-json'), false)
+      return true
+    })
+    assert.equal(await readFile(file, 'utf8'), 'broken-json')
+    assert.deepEqual(await readFile(`${file}.bak`), backupBefore)
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
