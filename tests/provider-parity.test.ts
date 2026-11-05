@@ -164,13 +164,16 @@ async function fixture(
   let liveConfig = { ...config, baseURL, apiKeyEnv: 'PARITY_TEST_KEY' }
   const official = ctx.plugin(OfficialApiKey, liveConfig)
   await official
+  // Read the same validated settings references passed to the official plugin.
+  const appliedConfig = (): OfficialApiKey.Config =>
+    ('effectiveConfig' in official ? official.effectiveConfig : official.config) as OfficialApiKey.Config
   await pool.init()
   await pool.updateSettings({ refreshIntervalSeconds: 0 })
   await pool.importKeys([{ key: syntheticKey }, { key: spareKey }])
   if (testing.establishBaseline !== false) await pool.refresh()
   await ctx.plugin({
     name: 'pool-official-parity', inject: ['llm'],
-    apply(child: Context) { registerPoolProvider(child, pool, { baseURL, options: () => OfficialApiKey.plainOptions(official.config) }) },
+    apply(child: Context) { registerPoolProvider(child, pool, { baseURL, options: () => OfficialApiKey.plainOptions(appliedConfig()) }) },
   })
   return {
     ctx, pool, wires, baseURL, official,
@@ -184,7 +187,7 @@ async function fixture(
       // stale-listing or stale-policy bugs behind a new adapter instance.
       const candidate = OfficialApiKey.Config(liveConfig)
       for (const [key, value] of Object.entries(candidate)) {
-        const target: unknown = official.config[key]
+        const target: unknown = Reflect.get(appliedConfig(), key)
         assert.ok(isVolatile(value) && isVolatile(target))
         updateVolatile(target, value)
       }
@@ -561,15 +564,21 @@ test('cancellation after streamed tool output has the same official chunks and t
 async function officialRetry(ctx: Context) {
   const definitions = new Map<string, ProjectionDefinition>()
   const cells = new WeakMap<object, Map<string, unknown>>()
+  function stateOf(session: object, key: string) {
+    let state = cells.get(session)
+    if (!state) { state = new Map(); cells.set(session, state) }
+    if (!state.has(key)) state.set(key, definitions.get(key)!.init())
+    return state.get(key)
+  }
   ctx.provide('agents', {} as Context['agents'])
   ctx.provide('sessionProjections', {
-    register(definition: ProjectionDefinition) { definitions.set(definition.key, definition); return () => definitions.delete(definition.key) },
-    stateOf(session: object, key: string) {
-      let state = cells.get(session)
-      if (!state) { state = new Map(); cells.set(session, state) }
-      if (!state.has(key)) state.set(key, definitions.get(key)!.init())
-      return state.get(key)
+    register(definition: ProjectionDefinition) {
+      definitions.set(definition.key, definition)
+      return Object.assign(() => definitions.delete(definition.key), {
+        stateOf: (session: object) => stateOf(session, definition.key),
+      })
     },
+    stateOf,
   })
   await ctx.plugin(LlmRetry)
   return () => {

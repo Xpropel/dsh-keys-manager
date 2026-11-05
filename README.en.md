@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Xpropel/dsh-keys-manager/releases/tag/v0.6.6"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
+  <a href="https://github.com/Xpropel/dsh-keys-manager/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Xpropel/dsh-keys-manager?style=flat-square" /></a>
   <img alt="Tests: 194 passing" src="https://img.shields.io/badge/tests-194%20passing-brightgreen?style=flat-square" />
   <img alt="Node 22.19+" src="https://img.shields.io/badge/node-%3E%3D22.19-339933?style=flat-square" />
   <img alt="DeepSeek Harness plugin" src="https://img.shields.io/badge/DeepSeek%20Harness-plugin-4D6BFE?style=flat-square" />
@@ -34,7 +34,7 @@
 
 ## Installation
 
-1. Download `dsh-deepseek-key-pool-0.6.6.tgz` from [Releases](https://github.com/Xpropel/dsh-keys-manager/releases).
+1. Use the `dsh-deepseek-key-pool-<version>.tgz` archive for the version you want to install. Published packages are available on [Releases](https://github.com/Xpropel/dsh-keys-manager/releases).
 2. In the DeepSeek Harness desktop app, open **Plugins → Add plugin → Install third-party plugin**, enter the absolute path of the package, install and enable it.
 3. Open **API Key Pool** in the sidebar.
 

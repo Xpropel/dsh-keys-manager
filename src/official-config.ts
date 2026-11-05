@@ -103,9 +103,11 @@ export function createOfficialConnectionSource(
       const fiber = selected.fiber
       // LOADING already owns a schema-validated Config; waiting for ACTIVE here can
       // miss the provider's registration event during the same startup turn.
-      if (selected.disabled || !fiber || (fiber.state !== 1 && fiber.state !== 2)
-        || fiber.config === undefined || fiber.config === null) throw unavailable()
-      const config = section(fiber.config, lastPath)
+      if (selected.disabled || !fiber || (fiber.state !== 1 && fiber.state !== 2)) throw unavailable()
+      // Cordis 4.1 keeps raw input in config. Read the same validated live
+      // values its plugin received, including the volatile settings references.
+      const liveConfig = 'effectiveConfig' in fiber ? fiber.effectiveConfig : fiber.config
+      const config = section(liveConfig, lastPath)
       if (config === undefined || config === null) throw unavailable()
       return {
         options: OfficialApiKey.resolveAdapterOptions(

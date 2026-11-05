@@ -96,6 +96,47 @@ test('schema-validated LOADING entries are readable before provider-directory re
   assert.equal(f.source.get().maxTokens, 345)
 })
 
+test('Cordis 4.1 reads accepted live settings even when the raw edit differs or is absent', async () => {
+  const f = fixture()
+  let effective = config({ maxTokens: 417 })
+  f.fiber.config = { maxTokens: -1 }
+  Object.defineProperty(f.fiber, 'effectiveConfig', { get: () => effective })
+  assert.equal(f.source.get().maxTokens, 417)
+  const seen: number[] = []
+  const unsubscribe = f.source.subscribe(() => seen.push(f.source.get().maxTokens))
+  try {
+    f.fiber.config = undefined
+    effective = config({ maxTokens: 912 })
+    f.owner.emit('loader/volatile-update', [['maxTokens']])
+    await turn()
+    assert.deepEqual(seen, [912])
+  } finally { unsubscribe() }
+})
+
+test('Cordis 4.1 never substitutes raw input while live settings are unavailable', () => {
+  const f = fixture({ maxTokens: 500 })
+  Object.defineProperty(f.fiber, 'effectiveConfig', { value: undefined })
+  assert.throws(() => f.source.get(), { code: 'KEY_POOL_CONFIG_UNAVAILABLE' })
+})
+
+test('a mounted provider reads exactly the configuration the installed Cordis delivered to apply', async t => {
+  const ctx = new Context()
+  t.after(() => ctx.fiber.dispose())
+  let received: OfficialApiKey.ResolvedDeepSeekOptions | undefined
+  const fiber = ctx.plugin({
+    name: 'mounted-official-config-test',
+    Config: OfficialApiKey.Config,
+    apply(owner: Context, effective: OfficialApiKey.Config) {
+      received = OfficialApiKey.resolveAdapterOptions(OfficialApiKey.plainOptions(effective), launchEnvironmentOf(owner))
+    },
+  }, { maxTokens: 1749 })
+  await fiber
+  const entry = { options: { id: 'official-renamed', name: '@deepseek-ai/dsh-llm-deepseek-api-key' }, disabled: false, fiber } satisfies Pick<Entry, 'options' | 'disabled' | 'fiber'>
+  ctx.provide('configEditor', { entries: () => [entry] } as unknown as ConfigEditor)
+  assert.equal(received?.maxTokens, 1749)
+  assert.deepEqual(createOfficialConnectionSource(ctx).get(), received)
+})
+
 test('loader entries supply the public fallback when ConfigEditor omits an official row', () => {
   const f = fixture({ maxTokens: 678 })
   const entry = f.entry

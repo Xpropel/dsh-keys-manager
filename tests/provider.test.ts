@@ -308,7 +308,7 @@ test('the raw stream guard never retries a rotation failure after handing out a 
   const result = await collect(rotateUnstartedStream(fixture.pool, request(), async function* () {
     attempts++
     yield* expected
-  }))
+  }, () => assert.fail('cannot redispatch after a delivered chunk')))
   assert.equal(attempts, 1)
   assert.deepEqual(result, expected)
 })

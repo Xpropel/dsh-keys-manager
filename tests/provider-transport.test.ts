@@ -203,7 +203,9 @@ async function attachRetry(ctx: Context) {
     register(definition: ProjectionDefinition) {
       definitions.set(definition.key, definition)
       states.set(definition.key, definition.init())
-      return () => { definitions.delete(definition.key); states.delete(definition.key) }
+      return Object.assign(() => { definitions.delete(definition.key); states.delete(definition.key) }, {
+        stateOf: () => states.get(definition.key),
+      })
     },
     stateOf(_session: unknown, key: string) { return states.get(key) },
   })

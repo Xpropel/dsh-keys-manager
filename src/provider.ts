@@ -9,7 +9,7 @@ import { KeyPool, PoolError } from './pool.ts'
 import { classifyNativeRequestError, hasSafePrototype, safeRequestErrorType } from './request-errors.ts'
 import { createRequestDiagnostics } from './request-diagnostics.ts'
 import { createOfficialConnectionSource } from './official-config.ts'
-import { registerOfficialPoolTransport } from './official-provider.ts'
+import { registerOfficialPoolTransport, type PoolConnection } from './official-provider.ts'
 
 export const PROVIDER = 'deepseek-key-pool'
 export const ROTATE_CODE = 'KEY_POOL_ROTATE'
@@ -66,14 +66,15 @@ function isRotation(failure: LlmFailure): boolean {
 export async function* rotateUnstartedStream(
   pool: KeyPool,
   options: GenerateOptions,
-  next: () => AsyncIterable<StreamChunk>,
+  firstAttempt: () => AsyncIterable<StreamChunk>,
+  retryAttempt: () => AsyncIterable<StreamChunk>,
 ): AsyncIterable<StreamChunk> {
   const maxAttempts = Math.max(1, pool.snapshot().keys.length)
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     options.signal?.throwIfAborted()
     let emitted = false
     let retry = false
-    for await (const chunk of next()) {
+    for await (const chunk of attempt === 0 ? firstAttempt() : retryAttempt()) {
       options.signal?.throwIfAborted()
       if (!emitted && chunk.type === 'finish' && chunk.reason.kind === 'error'
         && isRotation(chunk.reason.failure) && canRotate(pool) && attempt + 1 < maxAttempts) {
@@ -93,6 +94,7 @@ export function registerPoolProvider(ctx: Context, pool: KeyPool, internal?: { b
     signal?: AbortSignal; usedIds: Set<string>; requestId: string; sessionId?: string;
     model: string; startedAt: number; receivedChunks: number;
     lastError?: { keyId: string; errorType: string; networkCode?: string };
+    rotationConnection?: PoolConnection;
   }>()
   const diagnostics = createRequestDiagnostics()
   let disposed = false
@@ -100,6 +102,7 @@ export function registerPoolProvider(ctx: Context, pool: KeyPool, internal?: { b
     ? () => ({ ...internal.options?.(), ...(internal.baseURL === undefined ? {} : { baseURL: internal.baseURL }) })
     : undefined)
   registerOfficialPoolTransport(ctx, PROVIDER, source, {
+    rotationConnection: () => requests.getStore()?.rotationConnection,
     present: async connection => {
       try {
         // Discovery needs a credential, not a balance-observation side effect.
@@ -128,7 +131,11 @@ export function registerPoolProvider(ctx: Context, pool: KeyPool, internal?: { b
           }
           // In particular, raw TypeErrors reach the official outer TRANSPORT wrapper.
           // This hook must never rename, sanitize, or reconstruct non-quota errors.
-          return credentialFailure(pool, lease.id, error, request?.signal)
+          const failure = await credentialFailure(pool, lease.id, error, request?.signal)
+          if (request && isLlmError(failure) && isRotation(failure.failure)) {
+            request.rotationConnection = connection
+          }
+          return failure
         },
       }
     },
@@ -147,9 +154,18 @@ export function registerPoolProvider(ctx: Context, pool: KeyPool, internal?: { b
       || !budget.allow(payload.agent, payload.turn, payload.step, pool.snapshot().keys.length)) return undefined
     return { kind: 'retry' }
   })
+  // Each 402 retry enters a fresh Host waterfall. Only the outer call owns the
+  // rotation budget, diagnostics and balance refresh for this logical stream.
+  const redispatch = new WeakSet<GenerateOptions>()
   ctx.on('llm/stream', (request, next) => {
     if (request.provider !== PROVIDER) return next()
-    const upstream = () => isAgentLoopRequest(request) ? next() : rotateUnstartedStream(pool, request, next)
+    if (redispatch.delete(request)) return next()
+    const retryAttempt = () => {
+      redispatch.add(request)
+      try { return ctx.llm.stream(request) }
+      finally { redispatch.delete(request) }
+    }
+    const upstream = () => isAgentLoopRequest(request) ? next() : rotateUnstartedStream(pool, request, next, retryAttempt)
     return (async function* (): AsyncIterable<StreamChunk> {
       const usage: NonNullable<ReturnType<typeof requests.getStore>> = {
         signal: request.signal, usedIds: new Set<string>(), requestId: randomUUID(),
